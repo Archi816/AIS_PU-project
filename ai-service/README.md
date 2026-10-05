@@ -12,7 +12,9 @@ The technician confirms the diagnosis and repair actions.
 
 The initial FastAPI service exposes `GET /health` and interactive API documentation
 at `/docs`. Model connection, database, chat, and retrieval are not implemented yet.
-API and database boundaries require team agreement.
+The initial analysis contract is implemented with validation and explicit model-unavailable
+responses. See `API_CONTRACT.md` for payloads, limits, and integration behavior.
+Database and authentication boundaries still require team agreement.
 
 ## Local development (Windows PowerShell)
 
