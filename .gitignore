@@ -1,0 +1,23 @@
+# Local IDE state
+.vs/
+*.user
+*.suo
+
+# Python environments and generated files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+
+# .NET build output
+[Bb]in/
+[Oo]bj/
