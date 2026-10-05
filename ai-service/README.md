@@ -10,8 +10,45 @@ The technician confirms the diagnosis and repair actions.
 
 ## Current status
 
-Planning and repository setup only. No running service, model connection, or database
-has been implemented yet. API and database boundaries require team agreement.
+The initial FastAPI service exposes `GET /health` and interactive API documentation
+at `/docs`. Model connection, database, chat, and retrieval are not implemented yet.
+API and database boundaries require team agreement.
+
+## Local development (Windows PowerShell)
+
+Run these commands from the `ai-service` directory. Python 3.14 is the initial
+development version. Create `.venv` with your installed Python if it does not exist.
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Open http://127.0.0.1:8000/health. Expected response:
+
+```json
+{"status":"ok","service":"lems-ai-service"}
+```
+
+Open http://127.0.0.1:8000/docs to try the endpoint using **Try it out** and **Execute**.
+Stop the server with Ctrl+C. The `/` path is not implemented and returns 404.
+The docs UI loads its Swagger UI assets from a CDN, so it may require internet access.
+
+`/health` only confirms that this process can answer requests; it does not claim
+that a language model or database is connected. The server listens locally only.
+`--reload` restarts it after code edits and is for development, not production.
+
+## Files and concepts
+
+- `app/__init__.py`: marks `app` as a Python package.
+- `app/main.py`: creates the FastAPI application and declares its HTTP routes.
+- `requirements.txt`: pinned library versions used for this initial setup.
+- `.venv/`: local Python environment; excluded from Git.
+
+FastAPI maps HTTP requests to Python functions. Uvicorn is the server that listens
+for requests. In `app.main:app`, `app.main` means `app/main.py`, and the last `app`
+is the application object inside that file. `GET` retrieves information; `/health`
+is the route path. The Python dictionary is serialized to JSON for the caller.
 
 ## Work breakdown
 
