@@ -5,11 +5,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.schemas import AnalysisRequest, AnalysisResponse, ErrorResponse
+from app.model_service import ModelUnavailable, analyze_with_model
 
 app = FastAPI(
     title="LEMS AI Service",
-    description="Equipment maintenance assistant API. Model integration is not configured yet.",
-    version="0.2.0",
+    description="Equipment maintenance assistant API. Azure model configured via environment.",
+    version="0.3.0",
 )
 
 
@@ -37,9 +38,12 @@ def health() -> dict[str, str]:
         503: {"model": ErrorResponse, "description": "Model unavailable or not configured"},
     },
 )
-def analyze(payload: AnalysisRequest) -> AnalysisResponse:
-    """Validate a request. Successful response contracts are reserved for model integration."""
-    return JSONResponse(status_code=503, content={"error": {
-        "code": "MODEL_UNAVAILABLE",
-        "message": "Сервис модели недоступен: подключение ещё не настроено.",
-    }})
+def analyze(payload: AnalysisRequest):
+    """Return validated model output or a safe error without provider details."""
+    try:
+        return analyze_with_model(payload)
+    except ModelUnavailable:
+        return JSONResponse(status_code=503, content={"error": {
+            "code": "MODEL_UNAVAILABLE",
+            "message": "Сервис модели временно недоступен. Проверьте настройки подключения или повторите запрос позже.",
+        }})

@@ -1,6 +1,7 @@
 """Exercise real HTTP validation and both declared success schemas without a model."""
 
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -25,6 +26,7 @@ class ContractTests(unittest.TestCase):
         cls.process = subprocess.Popen(
             [sys.executable, '-m', 'uvicorn', 'app.main:app', '--port', str(port)],
             cwd=Path(__file__).resolve().parents[1],
+            env={**os.environ, "AZURE_OPENAI_API_KEY": ""},
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         cls.addClassCleanup(cls.stop_server)

@@ -11,7 +11,7 @@ The technician confirms the diagnosis and repair actions.
 ## Current status
 
 The initial FastAPI service exposes `GET /health` and interactive API documentation
-at `/docs`. Model connection, database, chat, and retrieval are not implemented yet.
+at `/docs`. Azure Responses API integration is implemented; live credentials must be configured locally. Database persistence and retrieval are not implemented yet.
 The initial analysis contract is implemented with validation and explicit model-unavailable
 responses. See `API_CONTRACT.md` for payloads, limits, and integration behavior.
 Database and authentication boundaries still require team agreement.
@@ -78,3 +78,24 @@ agreement with the frontend, C# backend, and database owners.
   of the internal C# implementation.
 - Loading documents is retrieval preparation, not training a model. Confirm the
   course's ML assessment criteria with the instructor.
+
+## Configure Azure locally
+
+The Azure deployment is `gpt-5-mini`. Copy `.env.example` to `.env` only if `.env`
+does not already exist, then fill AZURE_OPENAI_API_KEY locally. Never commit `.env`.
+The supplied base URL comes from Foundry Continue in code; it is not the project endpoint.
+Environment variables override .env values. Settings are read at each request.
+
+The service uses Responses API structured output, minimal reasoning, a 2000 output-token
+cap, 45-second timeout, no automatic retries, and store=False. This is not a guarantee
+of zero provider retention. Requests send equipment model and problem description;
+ticket IDs are retained locally. Web search and RAG are not enabled.
+
+Run the existing uvicorn command, then POST via /docs. Requests now consume Azure
+model tokens when a real key is configured. This local API has no authentication yet;
+keep it bound to 127.0.0.1 until team access controls are implemented.
+
+Missing configuration, provider errors, refusals, incomplete or invalid output return
+503 MODEL_UNAVAILABLE without exposing raw upstream errors. /health remains liveness-only.
+Tests isolate credentials and use provider doubles; they never prove live Azure availability.
+Run: `.\.venv\Scripts\python.exe -m unittest discover -s tests -v`.

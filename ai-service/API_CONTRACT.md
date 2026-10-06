@@ -1,6 +1,6 @@
 # Maintenance analysis API v1
 
-Status: agreed initial contract; model integration is pending. Local development only;
+Status: agreed initial contract; Azure model integration is implemented; local credentials are required. Local development only;
 authentication must be agreed with the team before deployment. No database writes.
 
 ## Request
@@ -20,7 +20,7 @@ numbers, and unknown fields are rejected. Maximum lengths: ticket_id 100,
 equipment_model 200, problem_description 4000 characters. ticket_id is an opaque
 identifier supplied by the main backend, not an ID created by this service.
 
-## Successful responses (200, contract examples only)
+## Successful responses (200, illustrative examples)
 
 The frontend switches on `result_type`.
 
@@ -49,13 +49,13 @@ Source citations will be added when the documentation/RAG contract is agreed.
 
 ## Errors
 
-Currently every valid request returns **503**, because no model is connected:
+Missing configuration or a model failure returns **503**. With valid Azure settings, a valid request calls the model and may return 200:
 
 ```json
 {
   "error": {
     "code": "MODEL_UNAVAILABLE",
-    "message": "Сервис модели недоступен: подключение ещё не настроено."
+    "message": "Сервис модели временно недоступен. Проверьте настройки подключения или повторите запрос позже."
   }
 }
 ```
