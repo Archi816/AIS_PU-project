@@ -1,4 +1,4 @@
-"""Exercise real HTTP validation and both declared success schemas without a model."""
+"""Exercise real HTTP validation and the report-only success schema without a model."""
 
 import json
 import os
@@ -19,6 +19,15 @@ from app.schemas import AnalysisResponse
 class ContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        from tempfile import TemporaryDirectory
+        from unittest.mock import patch
+        from app.catalog import initialize
+        cls.temp = TemporaryDirectory()
+        cls.addClassCleanup(cls.temp.cleanup)
+        cls.db_env = patch.dict(os.environ, {'LEMS_CATALOG_PATH': cls.temp.name + '/catalog.db'})
+        cls.db_env.start()
+        cls.addClassCleanup(cls.db_env.stop)
+        initialize()
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0))
             port = sock.getsockname()[1]
@@ -61,12 +70,12 @@ class ContractTests(unittest.TestCase):
 
     @staticmethod
     def valid():
-        return dict(ticket_id='REQ-104', equipment_model='Prusa MK4',
+        return dict(ticket_id='REQ-104', equipment_id='PRN-001',
                     problem_description='No filament comes out.')
 
     def test_invalid_requests(self):
         cases = [{}, {**self.valid(), 'ticket_id': 104},
-                 {**self.valid(), 'equipment_model': '  '},
+                 {**self.valid(), 'equipment_id': '  '},
                  {**self.valid(), 'problem_description': None},
                  {**self.valid(), 'problem_description': 'x' * 4001},
                  {**self.valid(), 'unknown': 'value'}]
@@ -77,19 +86,25 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(body['error']['code'], 'VALIDATION_ERROR')
         self.assertEqual(self.post(b'{invalid')[0], 422)
 
-    def test_success_contract_variants(self):
+    def test_success_contract(self):
         adapter = TypeAdapter(AnalysisResponse)
-        adapter.validate_python(dict(ticket_id='1', result_type='clarification',
-                                     questions=['What is displayed?']))
-        adapter.validate_python(dict(ticket_id='1', result_type='report',
-                                     symptoms=['No extrusion'], possible_causes=[],
-                                     recommended_checks=[]))
+        report = dict(ticket_id='1', result_type='report', symptoms=[],
+                      possible_causes=[], recommended_checks=[],
+                      missing_information=['Equipment symptoms were not provided.'],
+                      documentation_status='unavailable', documentation_sources=[])
+        adapter.validate_python(report)
+        for invalid in [{**report, 'result_type': 'clarification'},
+                        {**report, 'questions': ['What happened?']},
+                        {**report, 'missing_information': ['  ']}]:
+            with self.assertRaises(ValidationError):
+                adapter.validate_python(invalid)
+        del report['missing_information']
         with self.assertRaises(ValidationError):
-            adapter.validate_python(dict(ticket_id='1', result_type='clarification', questions=[]))
+            adapter.validate_python(report)
 
     def test_openapi_exposes_contract(self):
         with urlopen(self.base + '/openapi.json', timeout=3) as response:
             operation = json.load(response)['paths']['/api/v1/maintenance/analyze']['post']
         self.assertTrue({'200', '422', '503'} <= operation['responses'].keys())
         schema = operation['responses']['200']['content']['application/json']['schema']
-        self.assertEqual(schema['discriminator']['propertyName'], 'result_type')
+        self.assertEqual(schema['$ref'], '#/components/schemas/ReportResponse')

@@ -1,0 +1,93 @@
+[
+  {
+    "id": "PC-001",
+    "category": "computer",
+    "name": "Laboratory workstation",
+    "model": null,
+    "location": "Not verified",
+    "condition": "unknown",
+    "documentation_url": null,
+    "documentation_text": "",
+    "documentation_section": null,
+    "documentation_verified_at": null,
+    "is_demo": true
+  },
+  {
+    "id": "LAP-001",
+    "category": "laptop",
+    "name": "Student laptop",
+    "model": null,
+    "location": "Not verified",
+    "condition": "unknown",
+    "documentation_url": null,
+    "documentation_text": "",
+    "documentation_section": null,
+    "documentation_verified_at": null,
+    "is_demo": true
+  },
+  {
+    "id": "PRN-001",
+    "category": "3d_printer",
+    "name": "3D printer",
+    "model": "Creality Ender-3",
+    "location": "Not verified",
+    "condition": "unknown",
+    "documentation_url": "https://www.creality.com/download/ender-3-3d-printer",
+    "documentation_text": "",
+    "documentation_section": null,
+    "documentation_verified_at": null,
+    "is_demo": true
+  },
+  {
+    "id": "ROB-001",
+    "category": "robot",
+    "name": "Mobile robot",
+    "model": "TurtleBot3 Burger",
+    "location": "Not verified",
+    "condition": "unknown",
+    "documentation_url": "https://emanual.robotis.com/docs/en/platform/turtlebot3/overview/",
+    "documentation_text": "",
+    "documentation_section": null,
+    "documentation_verified_at": null,
+    "is_demo": true
+  },
+  {
+    "id": "ARD-001",
+    "category": "electronics",
+    "name": "Arduino development kit",
+    "model": "Arduino UNO R3",
+    "location": "Not verified",
+    "condition": "unknown",
+    "documentation_url": "https://support.arduino.cc/hc/en-us/articles/4401874331410--Error-avrdude-when-uploading",
+    "documentation_text": "Reviewed summary for upload errors on Arduino UNO R3: Check that Arduino IDE has the matching board and serial port selected. Other IDE instances and serial-monitor applications may occupy the port. Verify the USB connection and use a cable that transfers data, not a charging-only cable. A direct computer USB connection can help isolate hub problems. Record the full upload error, board name, operating system, and IDE version for diagnosis. These checks concern upload failures, not every electronics fault.",
+    "documentation_section": "General troubleshooting checklist; Still need help",
+    "documentation_verified_at": "2026-10-13",
+    "is_demo": true
+  },
+  {
+    "id": "RPI-001",
+    "category": "computer",
+    "name": "Raspberry Pi kit",
+    "model": null,
+    "location": "Not verified",
+    "condition": "unknown",
+    "documentation_url": null,
+    "documentation_text": "",
+    "documentation_section": null,
+    "documentation_verified_at": null,
+    "is_demo": true
+  },
+  {
+    "id": "MUL-001",
+    "category": "measurement",
+    "name": "Digital multimeter",
+    "model": null,
+    "location": "Not verified",
+    "condition": "unknown",
+    "documentation_url": null,
+    "documentation_text": "",
+    "documentation_section": null,
+    "documentation_verified_at": null,
+    "is_demo": true
+  }
+]
