@@ -21,3 +21,9 @@ htmlcov/
 # .NET build output
 [Bb]in/
 [Oo]bj/
+
+# Local catalog runtime files
+ai-service/data/*.db
+ai-service/data/*.db-*
+
+ai-service/data/embedding-cache/

@@ -1,0 +1,93 @@
+[
+  {
+    "id": "PC-001",
+    "category": "computer",
+    "name": "Laboratory workstation",
+    "model": "Dell OptiPlex 7090 Micro",
+    "location": "Demo Computing Lab",
+    "condition": "operational",
+    "documentation_url": "https://www.dell.com/support/kbdoc/en-au/000186466/optiplex-7090-desktop-system-guide",
+    "documentation_text": "Scope: Dell OptiPlex 7090 family support guide, used for the proposed Micro configuration. Dell provides SupportAssist, diagnostic error references, LED/beep references and separate guides for display, boot, network and thermal problems. This summary does not contain the individual LED-code tables. Project triage policy: record whether power, startup self-test, boot or video is failing; note exact diagnostic messages and blink sequences without inventing their meaning. Inspect external monitor/power connections and record the OS and affected peripherals. Do not assume a CPU/RAM/SSD configuration or prescribe firmware updates, OS resets or opening the case.",
+    "documentation_section": "Hardware, Diagnostics, and Error Codes; support guide",
+    "documentation_verified_at": "2026-10-15",
+    "is_demo": true
+  },
+  {
+    "id": "LAP-001",
+    "category": "laptop",
+    "name": "Student laptop",
+    "model": "HP ProBook 450 G8",
+    "location": "Demo Equipment Loan Desk",
+    "condition": "operational",
+    "documentation_url": "https://support.hp.com/th-en/document/ish_2854458-2733239-16",
+    "documentation_text": "Scope: general HP PC hardware-diagnostics guidance, not a ProBook-specific repair manual. HP provides Windows and UEFI diagnostics; UEFI tests can be available independently of the installed OS. The diagnostic results can include a 24-digit failure ID. Record the test name, failure ID and product ID rather than interpreting an unverified code. Project triage policy: for this proposed ProBook 450 G8, record charging indicator, external adapter label, boot-screen messages and OS version as relevant. Review existing diagnostic results. Confirm diagnostics availability on this configuration before suggesting a test. Do not open the battery, change firmware or reset the operating system.",
+    "documentation_section": "HP PCs: hardware diagnostics; general HP guidance",
+    "documentation_verified_at": "2026-10-15",
+    "is_demo": true
+  },
+  {
+    "id": "PRN-001",
+    "category": "3d_printer",
+    "name": "3D printer",
+    "model": "Creality Ender-3",
+    "location": "Demo Prototyping Lab",
+    "condition": "operational",
+    "documentation_url": "https://store.creality.com/blogs/all/ender-3-extruder-skipping",
+    "documentation_text": "Scope: original Creality Ender-3; limited manufacturer article summary, not a full service manual. Extruder skipping can cause uneven filament delivery, gaps and incomplete prints. Poor extrusion can indicate a blockage but does not establish its cause. The article discusses moisture-related filament inconsistencies and dry storage. Project triage policy, not manufacturer repair instructions: record clicking, visible filament movement, spool condition, material type and existing temperature/error readings. This summary excludes heating, manual extrusion, disassembly and adjustment procedures.",
+    "documentation_section": "Extruder skipping: limited preliminary summary",
+    "documentation_verified_at": "2026-10-15",
+    "is_demo": true
+  },
+  {
+    "id": "ROB-001",
+    "category": "robot",
+    "name": "Mobile robot",
+    "model": "TurtleBot3 Burger",
+    "location": "Demo Robotics Lab",
+    "condition": "operational",
+    "documentation_url": "https://emanual.robotis.com/docs/en/platform/turtlebot3/bringup/",
+    "documentation_text": "Scope: TurtleBot3 Burger with ROS 2; confirm the ROS distribution. ROBOTIS specifies burger model selection. Remote PC and robot SBC need a shared network, matching ROS_DOMAIN_ID and ROS middleware implementation; multicast support affects discovery. Review existing bringup logs and observe published topics with ros2 topic list. Examples include /scan, /odom and /battery_state, but topics vary by package version. Jazzy uses TwistStamped for cmd_vel by default. Project triage policy: record ROS version, model selection, topic list and error output. An absent topic does not prove sensor failure. Do not automatically change network settings, start motion or flash firmware.",
+    "documentation_section": "Bringup TurtleBot3: ROS 2 Humble/Jazzy; topic discovery",
+    "documentation_verified_at": "2026-10-15",
+    "is_demo": true
+  },
+  {
+    "id": "ARD-001",
+    "category": "electronics",
+    "name": "Arduino development kit",
+    "model": "Arduino UNO R3",
+    "location": "Demo Electronics Lab",
+    "condition": "operational",
+    "documentation_url": "https://support.arduino.cc/hc/en-us/articles/4401874331410--Error-avrdude-when-uploading",
+    "documentation_text": "Reviewed summary for upload errors on Arduino UNO R3: Check that Arduino IDE has the matching board and serial port selected. Other IDE instances and serial-monitor applications may occupy the port. Verify the USB connection and use a cable that transfers data, not a charging-only cable. A direct computer USB connection can help isolate hub problems. Record the full upload error, board name, operating system, and IDE version for diagnosis. These checks concern upload failures, not every electronics fault.",
+    "documentation_section": "General troubleshooting checklist; Still need help",
+    "documentation_verified_at": "2026-10-13",
+    "is_demo": true
+  },
+  {
+    "id": "RPI-001",
+    "category": "computer",
+    "name": "Raspberry Pi kit",
+    "model": "Raspberry Pi 4 Model B",
+    "location": "Demo Electronics Lab",
+    "condition": "operational",
+    "documentation_url": "https://www.raspberrypi.com/documentation/computers/getting-started.html",
+    "documentation_text": "Scope: Raspberry Pi 4 Model B, not Pi 5 or Zero. The official setup guide recommends a 5 V, 3 A supply for Pi 4 Model B and lists the 15 W USB-C supply. Setup involves an operating system image and configured login/network details. Project triage policy: record the power-supply label, connected USB peripherals, storage medium, OS version and observed boot/LED/display behaviour. Check external connections with power off when needed. For connection problems record the configured network and whether remote access was enabled. Do not assume a particular RAM capacity, decode unspecified LED patterns, or reimage storage without a backup and authorization.",
+    "documentation_section": "Getting started: power supply and operating system setup",
+    "documentation_verified_at": "2026-10-15",
+    "is_demo": true
+  },
+  {
+    "id": "MUL-001",
+    "category": "measurement",
+    "name": "Digital multimeter",
+    "model": "Fluke 115",
+    "location": "Demo Electronics Lab",
+    "condition": "operational",
+    "documentation_url": "https://www.fluke.com/en/product/electrical-testing/digital-multimeters/fluke-115",
+    "documentation_text": "Scope: Fluke 115 product overview, not a complete repair or electrical-work procedure. The meter supports true-RMS voltage/current, resistance, continuity, frequency and capacitance measurements, and Min/Max/Average recording. Project triage policy: record the selected function, displayed value/unit, connected input sockets, battery indicator and visible condition of disconnected leads. An unexpected reading does not by itself establish meter failure. Remove visibly damaged equipment from use. Do not recommend opening the meter, replacing fuses, bypassing protection or testing live circuits from this summary; consult the complete model-specific manual and qualified personnel.",
+    "documentation_section": "Product overview and measurement functions",
+    "documentation_verified_at": "2026-10-15",
+    "is_demo": true
+  }
+]
