@@ -98,7 +98,7 @@ Stores reports submitted by users about equipment malfunctions.
 
 `PENDING` / `CONFIRMED` / `IN_PROGRESS` → `CANCELED`
 
-## 4. Business Processes
+## Business Processes
 
 ### 1. Log In
 
@@ -429,7 +429,7 @@ flowchart TD
     AB --> AC
 ```
 
-## 5. Business Rules
+## Business Rules
 
 ### 1. System Login (Log In)
 
@@ -685,7 +685,13 @@ flowchart TD
 - **BR-GEN-06.** In case of validation or save errors, the system does not change the data and returns the user to input.
 - **BR-GEN-06.** The external service is not implemented as a separate entity or functional component of the system. It is represented only in the business scenario to show a possible equipment repair process. Separate buttons, interface elements, and program logic for interacting with the external service are not required.
 
-## 6. User Interface Requirements
+## AI Component
+
+1. When a student submits an equipment problem report, the system sends the problem description and relevant equipment information to the AI Component. The AI analyzes the provided data and generates a textual summary with recommendations about possible causes of the problem and ways to resolve it. The recommendations are displayed as a structured bullet list below the student's problem description in the repair request, where they are accessible to the administrator. The AI Component does not operate as a real-time chat; instead, it generates static recommendations for each report based on the provided information.
+
+2. The main backend, implemented in C#, sends a request to the AI Component, implemented in Python, containing the problem description and relevant equipment information. The AI Component processes the request and returns a response containing textual recommendations. The main backend stores or forwards the generated recommendations for display in the administrator's interface. No separate user interface for the AI Component is required.
+
+## User Interface Requirements
 
 1. The top bar is a compact status area located on the right side of the interface, designed to provide quick access to the user profile and notifications. It contains a notification indicator represented by a bell icon with a prominent badge indicating new system messages or updates. Next to it is the current account section, consisting of a circular avatar displaying the user's initials and their full name, ensuring constant visual identification of the authenticated user. Clicking the dropdown arrow next to the name opens a menu displaying the account role and providing a logout option.
 
@@ -731,11 +737,12 @@ flowchart TD
 
 6. **Remaining pages:** Implement all other sections using the same clean, intuitive visual style as the existing pages. Maintain a consistent layout, clear navigation, and straightforward interactions across the application to provide a smooth and user-friendly experience.
 
-## 7. Technical Requirements
+## Technical Requirements
 
 1. The main backend service must be implemented in C#, while the AI component must be implemented in Python. 
 2. Sessions must be implemented to manage user authentication and maintain user state across requests.
 
-## 7. Issues
+## Issues
 
 1. Identify and resolve any logical inconsistencies in the existing scenarios. Make reasonable corrections independently to ensure the system works reliably and remains consistent with the defined business processes and rules.
+2. If necessary, add attributes to the tables in the database as you see fit, but keep them to a minimum and avoid unnecessarily expanding the database schema.
