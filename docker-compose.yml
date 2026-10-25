@@ -1,0 +1,10 @@
+# Local stand-ins for the two cloud databases (SQL Server = Azure SQL engine, PostgreSQL = AWS RDS engine)
+services:
+  core-sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment: { ACCEPT_EULA: "Y", MSSQL_SA_PASSWORD: "Lems_Dev_Passw0rd!" }
+    ports: ["1433:1433"]
+  ops-postgres:
+    image: postgres:16
+    environment: { POSTGRES_USER: lems, POSTGRES_PASSWORD: lems_dev, POSTGRES_DB: lems_ops }
+    ports: ["5432:5432"]
