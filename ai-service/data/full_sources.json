@@ -1,0 +1,51 @@
+[
+  {
+    "equipment_id": "PC-001",
+    "title": "Dell OptiPlex 7090 Micro Service Manual (Dell-authored distributor copy)",
+    "url": "https://cdn.cs.1worldsync.com/syndication/mediaserverredirect/b3cc162a796f99deead42ec52fd87fb8/original.pdf",
+    "format": "pdf",
+    "selector": null
+  },
+  {
+    "equipment_id": "LAP-001",
+    "title": "HP ProBook 450 G8 Maintenance and Service Guide",
+    "url": "https://kaas.hpcloud.hp.com/pdf-public/pdf_12632943_en-US-1.pdf",
+    "format": "pdf",
+    "selector": null
+  },
+  {
+    "equipment_id": "PRN-001",
+    "title": "Creality Ender-3 extruder skipping troubleshooting",
+    "url": "https://store.creality.com/blogs/all/ender-3-extruder-skipping",
+    "format": "html",
+    "selector": ".main-acticle-wrapper"
+  },
+  {
+    "equipment_id": "ROB-001",
+    "title": "ROBOTIS TurtleBot3 Bringup (multiple ROS versions; match installed version)",
+    "url": "https://emanual.robotis.com/docs/en/platform/turtlebot3/bringup/",
+    "format": "html",
+    "selector": "#archive"
+  },
+  {
+    "equipment_id": "ARD-001",
+    "title": "Arduino UNO R3 User Manual A000066",
+    "url": "https://docs.arduino.cc/resources/datasheets/A000066-datasheet.pdf",
+    "format": "pdf",
+    "selector": null
+  },
+  {
+    "equipment_id": "RPI-001",
+    "title": "Raspberry Pi 4 Model B Datasheet",
+    "url": "https://pip-assets.raspberrypi.com/categories/545-raspberry-pi-4-model-b/documents/RP-008341-DS-1-raspberry-pi-4-datasheet.pdf",
+    "format": "pdf",
+    "selector": null
+  },
+  {
+    "equipment_id": "MUL-001",
+    "title": "Fluke 110/113/114/115/117 User Manual (use 115-specific instructions)",
+    "url": "https://media.fluke.com/5e1db354-3a6e-49cf-9edd-b10800c0e608_original%20file.pdf",
+    "format": "pdf",
+    "selector": null
+  }
+]

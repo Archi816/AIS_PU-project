@@ -27,3 +27,6 @@ ai-service/data/*.db
 ai-service/data/*.db-*
 
 ai-service/data/embedding-cache/
+
+# Downloaded full documents (rebuildable cache)
+ai-service/data/document-cache/

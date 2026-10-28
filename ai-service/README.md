@@ -1,184 +1,129 @@
-# AI Maintenance Assistant
+# LEMS AI service — запуск у коллеги
 
-Python service within the shared Lab Equipment Management System (LEMS).
+Сервис получает ID оборудования и описание проблемы на английском, ищет документацию в общей Supabase и возвращает предварительный отчёт для техника. Доступны два режима поиска: `summary` (краткие выдержки) и `full` (полные выбранные источники). Провайдеры OpenRouter и Azure сохранены; автоматического переключения между ними нет.
 
-## Intended responsibility
+## 1. Получить код и установить зависимости
 
-Collect reported equipment symptoms, retrieve relevant
-equipment documentation, and prepare a source-backed preliminary report for a technician.
-The technician confirms the diagnosis and repair actions. Reports are always in
-English; missing evidence is listed in missing_information, without a chat reply.
+В Visual Studio: **Git → Clone Repository**, URL `https://github.com/Archi816/AIS_PU-project.git`. Открой ветку с AI-сервисом (сейчас `feature/ai-service-setup`). После публикации изменений обнови её через Pull.
 
-## Current status
-
-The initial FastAPI service exposes `GET /health` and interactive API documentation
-at `/docs`. OpenRouter is the default report provider; Azure remains an explicitly selected alternative. Credentials must be configured locally. A single-table SQLite catalog supplies short reviewed summaries, searched with a local English embedding model. See [SETUP_OPENROUTER.md](SETUP_OPENROUTER.md) for setup and limitations.
-The initial analysis contract is implemented with validation and explicit model-unavailable
-responses. See `API_CONTRACT.md` for payloads, limits, and integration behavior.
-Database and authentication boundaries still require team agreement.
-
-## Local development (Windows PowerShell)
-
-Run these commands from the `ai-service` directory. Python 3.14 is the initial
-development version. Create `.venv` with your installed Python if it does not exist.
+Установи Python 3.14 (64-bit), затем открой PowerShell в папке `AIS_PU-project/ai-service`:
 
 ```powershell
+py -3.14 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m app.catalog
-.\.venv\Scripts\python.exe -m app.retrieval
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-Open http://127.0.0.1:8000/health. Expected response:
+`.venv` — отдельное окружение с библиотеками именно этого проекта. Оно создаётся на каждом ноутбуке; копировать чужую `.venv` не нужно. Активация окружения не требуется: команды явно используют его Python.
 
-```json
-{"status":"ok","service":"lems-ai-service"}
+## 2. Заполнить локальный .env
+
+Через личный канал получи у владельца проекта:
+
+- DATABASE_URL пользователя `lems_reader` для чтения общей Supabase;
+- сертификат CA Supabase или скачай его в настройках проекта;
+- ключ OpenRouter (либо создай свой);
+- ключ доступа к AI-сервису, согласованный с C# backend.
+
+Открой `.env` и заполни поля шаблона. Пример подключения к базе:
+
+```dotenv
+DATABASE_URL='postgresql://lems_reader.PROJECT_REF:ENCODED_PASSWORD@POOLER_HOST:5432/postgres?sslmode=verify-full&sslrootcert=C:/Users/YOUR_NAME/Downloads/prod-ca-2021.crt'
+MODEL_PROVIDER=openrouter
+OPENROUTER_MODEL=nvidia/nemotron-3.5-super-vl:free
+OPENROUTER_API_KEY=YOUR_KEY
+LEMS_SERVICE_API_KEY=YOUR_SERVICE_KEY
+RETRIEVAL_MODE=full
 ```
 
-Open http://127.0.0.1:8000/docs to try the endpoint using **Try it out** and **Execute**.
-Stop the server with Ctrl+C. The `/` path is not implemented and returns 404.
-The docs UI loads its Swagger UI assets from a CDN, so it may require internet access.
+PROJECT_REF, пароль и хост копируй из переданной строки подключения. Путь `sslrootcert` замени на реальный путь сертификата **на своём ноутбуке**. Внутри пароля специальные символы должны быть URL-кодированы: например `/` → `%2F`, `@` → `%40`; если строка уже подготовлена, повторно кодировать её не надо.
 
-`/health` only confirms that this process can answer requests; it does not claim
-that a language model or database is connected. The server listens locally only.
-`--reload` restarts it after code edits and is for development, not production.
-
-## Files and concepts
-
-- `app/__init__.py`: marks `app` as a Python package.
-- `app/main.py`: creates the FastAPI application and declares its HTTP routes.
-- `requirements.txt`: pinned library versions used for this initial setup.
-- `.venv/`: local Python environment; excluded from Git.
-
-FastAPI maps HTTP requests to Python functions. Uvicorn is the server that listens
-for requests. In `app.main:app`, `app.main` means `app/main.py`, and the last `app`
-is the application object inside that file. `GET` retrieves information; `/health`
-is the route path. The Python dictionary is serialized to JSON for the caller.
-
-## Work breakdown
-
-| Task | Done when |
-| --- | --- |
-| AI-01: Set up Python service | Python environment, dependency configuration, startup instructions, and health endpoint work locally. |
-| AI-02: Agree integration contract | Team agrees equipment identifiers, request/response fields, authentication, errors, and ownership of data. |
-| AI-03: Implement one-way assistant | Real model integration accepts equipment context and symptoms, lists missing information, and returns a structured preliminary report; unavailable model returns an explicit error. |
-| AI-04: Store reports | SQL migrations and persistence preserve reports, and links to equipment/request identifiers. |
-| AI-05: Ingest equipment documentation | Documents are associated with equipment models; extracted text retains source, version, and section/page references. |
-| AI-06: Add grounded recommendations | Retrieval filters by equipment model; reports cite retrieved sources and explicitly handle missing evidence. |
-| AI-07: Evaluate and integrate | Documented cases check retrieval relevance, source support, missing information, access control, and the complete frontend/backend workflow. |
-| AI-08: Package and deploy | Service runs in the agreed Docker setup and Azure environment with configured secrets and documented startup. |
-
-These labels are planning identifiers, not GitHub issue numbers. No GitHub issues
-have been created by adding this file. Implementation tasks may be refined after
-agreement with the frontend, C# backend, and database owners.
-
-## Collaboration
-
-- Use short-lived branches per coherent task, followed by a pull request.
-- Confirm whether the team integrates into `dev` or `wip` before opening a PR.
-- Keep credentials, virtual environments, and IDE caches out of Git.
-- Agree the API contract early; the Python implementation does not require knowledge
-  of the internal C# implementation.
-- Loading documents is retrieval preparation, not training a model. Confirm the
-  course's ML assessment criteria with the instructor.
-
-## Optional Azure provider
-
-Set `MODEL_PROVIDER=azure` explicitly. The Azure deployment is `gpt-5-mini`. Copy `.env.example` to `.env` only if `.env`
-does not already exist, then fill AZURE_OPENAI_API_KEY locally. Never commit `.env`.
-The supplied base URL comes from Foundry Continue in code; it is not the project endpoint.
-Environment variables override .env values. Settings are read at each request.
-
-The service uses Responses API structured output, minimal reasoning, a 2000 output-token
-cap, 60-second timeout, no automatic retries, and store=False. This is not a guarantee
-of zero provider retention. Requests send catalog equipment name/model, problem description and reviewed summary;
-ticket IDs are retained locally. Live web search is not enabled. Relevant excerpts are selected locally by equipment ID and English problem description.
-
-Run the existing uvicorn command, then POST via /docs. Requests now consume Azure
-model tokens when a real key is configured. This local API has no authentication yet;
-keep it bound to 127.0.0.1 until team access controls are implemented.
-
-Missing configuration, provider errors, refusals, incomplete or invalid output return
-503 MODEL_UNAVAILABLE without exposing raw upstream errors. /health remains liveness-only.
-Tests isolate credentials and use provider doubles; they never prove live Azure availability.
-Run: `.\.venv\Scripts\python.exe -m unittest discover -s tests -v`.
-
-## Local equipment catalog (start here)
-
-SQLite is included with Python; no extra installation or cloud payment is needed.
-From ai-service, run once on each developer machine:
+`LEMS_SERVICE_API_KEY` — общий секрет между C# и Python, минимум 32 случайных символа. Если запускаешь оба backend у себя, новый ключ можно получить командой ниже и записать одно и то же значение в настройки обоих backend:
 
 ```powershell
-.\.venv\Scripts\python.exe -m app.catalog
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+.\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-The first command creates data/equipment.db from data/equipment_seed.json. It
-preserves existing rows when repeated; edits to seed JSON do NOT overwrite an
-existing database. The JSON is reviewed initial data shared in Git; the runtime
-DB is ignored. To update a running catalog, edit its rows deliberately (no public
-write endpoint is provided). LEMS_CATALOG_PATH in the process environment can
-override the database path. Secrets stay in .env as before.
+`.env.example` — шаблон без секретов для Git. Реальные значения хранятся только в `.env`. Файл владельца `.env.admin` для обычного запуска не нужен.
 
-GET /api/v1/equipment lists seven fully populated demo items. Models, locations
-and operational conditions are project assumptions, not verified TUKE inventory.
-Every row has is_demo=true. Operational does not imply availability for booking.
-See [the readable catalog](data/CATALOG.md) for all rows, summaries and sources.
+## 3. Подготовить поиск и проверить через консоль
 
-POST /api/v1/maintenance/analyze now accepts:
+Один раз скачай локальную поисковую модель (~64 МБ файлов):
+
+```powershell
+.\.venv\Scripts\python.exe -m app.retrieval
+```
+
+Общая Supabase уже содержит оборудование и индекс полных документов. Создавать таблицы, скачивать руководства и повторять импорт на ноутбуке коллеги не нужно.
+
+```powershell
+# Только список устройств; языковая модель не вызывается
+.\.venv\Scripts\python.exe -m app.console --list
+# Ввести ID устройства и проблему; получить ответ
+.\.venv\Scripts\python.exe -m app.console
+```
+
+Пример: ID `ARD-001`, проблема `Arduino IDE reports programmer is not responding during USB upload.`
+
+Консоль показывает путь запроса, этапы и время. `report ready` означает успешную обработку. `Ctrl+C` отменяет запуск. На один запуск режим можно заменить флагом:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.console --retrieval summary
+.\.venv\Scripts\python.exe -m app.console --retrieval full
+```
+
+Режим по умолчанию берётся из `.env`. `--json` выводит JSON, а этапы остаются отдельно в stderr. Консоль использует ту же обработку, что HTTP API, но работает без сервера.
+
+## 4. Подключить C# backend
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+Открой http://127.0.0.1:8000/docs → **Authorize** → вставь `LEMS_SERVICE_API_KEY`. GET `/ready` проверяет базу, поиск и настройки без запроса к языковой модели. Затем отправь POST `/api/v1/maintenance/analyze`:
 
 ```json
 {
-  "ticket_id": "REQ-106",
+  "ticket_id": "REQ-108",
   "equipment_id": "ARD-001",
-  "problem_description": "Arduino IDE reports avrdude: programmer is not responding when uploading."
+  "problem_description": "Arduino IDE reports programmer is not responding during USB upload."
 }
 ```
 
-Documentation summaries now cover all seven items: Dell OptiPlex 7090 Micro,
-HP ProBook 450 G8, Creality Ender-3, TurtleBot3 Burger, Arduino UNO R3,
-Raspberry Pi 4 Model B and Fluke 115.
-Summaries are English paraphrases, not complete repair manuals. Manufacturer
-facts and project triage policy are explicitly separated. URLs and review dates
-are stored alongside the text in data/equipment_seed.json.
+C# на этом же ноутбуке использует URL `http://127.0.0.1:8000` и заголовок `X-Service-Key`. Пример C# и описание ответа: [API_CONTRACT.md](API_CONTRACT.md). Frontend получает результат через основной backend; ключи провайдера и базы остаются в Python-сервисе.
 
-HP guidance is general PC diagnostics; the Fluke source is a product overview.
-These are explicitly labelled in the summaries and are not model repair manuals.
+`127.0.0.1` означает текущий компьютер. При запуске C# и Python на разных компьютерах нужен доступный адрес Python-хоста и настройка сети. Здесь описан запуск обоих backend на ноутбуке коллеги. После изменений `.env` или кода останови сервер через Ctrl+C и запусти снова.
 
-After pulling changes, complete placeholders in an existing demo database with:
+## Настройки, ошибки и расходы
 
-```powershell
-.\.venv\Scripts\python.exe -m app.catalog --complete-demo
-```
+- `MODEL_PROVIDER=openrouter`: разрешены только модели с `:free`, автоматического перехода на платную нет. Каждый запрос отчёта расходует бесплатную квоту. Модель и стоимость запроса смотри в OpenRouter → Activity.
+- `MODEL_PROVIDER=azure`: явный выбор альтернативы; заполни поля AZURE_OPENAI в `.env`. Такие запросы могут расходовать Azure-кредит.
+- `CATALOG_UNAVAILABLE`: проверь активность Supabase, DATABASE_URL, пароль и путь сертификата.
+- `RETRIEVAL_UNAVAILABLE`: проверь скачанные веса и режим. Для full нужна таблица document_chunks.
+- `MODEL_UNAVAILABLE`: проверь ключ, доступность/квоту модели; ошибка также возможна при некорректном ответе провайдера.
+- `UNAUTHORIZED`: ключ X-Service-Key не совпал с настройкой Python.
 
-This fills missing models, placeholder locations and unknown conditions only for
-matching demo records. Custom models, locations, conditions and existing document
-text are preserved. Repeating is safe. To fill documentation only for already
-matching models, use --fill-missing-docs instead.
-New databases receive the updated seed immediately. No cloud calls are involved.
+`documentation_status=unavailable` сейчас означает, что нет выбранных процитированных источников: документы могли не подойти или модель не поставила ссылки. Отчёт тогда помечается как основанный на общих знаниях. Даже наличие ссылки не гарантирует правильность диагноза — результат проверяет техник.
 
-Sources reviewed 2026-10-15:
-- Ender-3: https://store.creality.com/blogs/all/ender-3-extruder-skipping
-  Limited extrusion and filament summary, not a V3 manual or repair procedure.
-- TurtleBot3: https://emanual.robotis.com/docs/en/platform/turtlebot3/bringup/
-  ROS 2 Humble/Jazzy topic discovery, model selection and version differences.
-Arduino source/review date remain in the seed (2026-10-13).
+## Что хранится в проекте
 
-Semantic search uses BAAI/bge-small-en-v1.5 through FastEmbed on CPU. It searches
-only the selected item's reviewed English text, using overlapping 90-word windows.
-At most three relevant excerpts go to one model call. Document vectors are cached
-in memory by text content (up to 32 entries); they are rebuilt after a restart.
-Weights are downloaded once with `python -m app.retrieval`; API requests load local
-files only. No URL downloading, vector server or paid embedding API is used.
+| Файлы | Назначение |
+|---|---|
+| app/console.py, app/main.py | Консоль и HTTP API |
+| app/model_service.py, app/schemas.py | Обработка, провайдеры и проверка ответа |
+| app/catalog.py, app/database.py | Каталог и SQL-подключение |
+| app/retrieval.py, app/embeddings.py | Выбор режима и общая локальная модель поиска |
+| app/retrieval_summary.py, app/retrieval_full.py | Независимые варианты поиска |
+| app/config.py, app/security.py | Настройки и доступ между backend |
+| app/index_documents.py, data/full_sources.json | Обновление полных источников владельцем базы |
+| data/equipment_seed.json, data/CATALOG.md | Начальные демонстрационные данные и их описание |
 
-The current corpus is still short summaries, not full manuals. Similarity cutoff
-0.48 is a heuristic, not a confidence probability; it needs broader evaluation as
-we add documents. No matching excerpt means documentation_status=unavailable.
-A broken embedding installation returns 503 RETRIEVAL_UNAVAILABLE instead.
-Sources indicate supplied context, not verified citations for every model claim.
-Reports remain preliminary and need technician review.
+Источники, обновление индекса и удаление одного из режимов описаны в [RAG.md](RAG.md). Импортёр сохраняется для обслуживания документов; при обычном запуске он не вызывается. Поиск не распознаёт рисунки и схемы. Модели оборудования и их доступность — демонстрационные данные, а не подтверждённый инвентарь TUKE.
 
-This SQLite file is a local first step, not the final two-database/container
-architecture. Coordinate catalog ownership with the C# team. AWS PostgreSQL
-migration requires replacing the catalog adapter and importing the data; do not
-assume the SQLite file can be directly deployed as an RDS database.
+Без DATABASE_URL можно явно использовать локальную SQLite: `python -m app.catalog` создаёт каталог из seed; для full потребуется отдельно построить индекс по RAG.md. Основной командный вариант — общая Supabase.
+
+## Перед Commit и Push
+
+В Visual Studio → Git Changes проверь список файлов. `.env`, `.env.admin`, `.venv`, SQLite, скачанные документы, кеши и настройки IDE исключены из Git. Сертификат хранится вне репозитория. Оставь **Amend выключенным**, введи сообщение нового коммита, например `chore: prepare AI service for team handoff`, нажми Commit All, затем Push. После публикации коллега сможет получить код через Pull.
+
+На новом компьютере нужны код из Git, локальные реквизиты, сертификат и скачанная поисковая модель. Автоматические тесты и завершённый скрипт миграции удалены; минимальная проверка работы — консоль и `/ready`. Docker пока отложен.

@@ -18,13 +18,19 @@ class AnalysisRequest(BaseModel):
 class DocumentationSource(BaseModel):
     url: str
     section: str
-    verified_at: str
+    verified_at: str = ""
+    source_id: str = ""
+    title: str = ""
+    page: int | None = None
+    excerpt: str = ""
+    retrieved_at: str = ""
 
 
 class ReportResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ticket_id: str
+    retrieval_mode: Literal["summary", "full"] = "summary"
     result_type: Literal["report"] = "report"
     preliminary: Literal[True] = True
     symptoms: list[Text]
@@ -38,7 +44,7 @@ class ReportResponse(BaseModel):
 AnalysisResponse = ReportResponse
 
 class ErrorDetail(BaseModel):
-    code: Literal["MODEL_UNAVAILABLE", "VALIDATION_ERROR", "EQUIPMENT_NOT_FOUND", "CATALOG_UNAVAILABLE", "RETRIEVAL_UNAVAILABLE"]
+    code: Literal["MODEL_UNAVAILABLE", "VALIDATION_ERROR", "EQUIPMENT_NOT_FOUND", "CATALOG_UNAVAILABLE", "RETRIEVAL_UNAVAILABLE", "UNAUTHORIZED", "SERVICE_NOT_CONFIGURED", "NOT_READY"]
     message: str
 
 
