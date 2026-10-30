@@ -1,22 +1,25 @@
-> **UNOFFICIAL DRAFT.** Full-stack prototype (C# backend + web UI + stand-in AI service). Not the official version.
-> The AI service here (`ai-service-prototype/`, endpoint `/analyze`) is a stand-in and does **not** use the team's
-> `feature/ai-service-setup` contract (`POST /api/v1/maintenance/analyze`). See "Integration with the team AI service" below.
+> **UNOFFICIAL DRAFT.** Full-stack prototype (C# backend + web UI) connected to the team's AI service (`ai-service/`, branch `feature/ai-service-setup`). Not the official version.
 
 # LEMS - Laboratory Equipment Management System
 
 * `backend/` - C# (ASP.NET Core 8 minimal API, EF Core, **two databases**: Azure SQL + PostgreSQL, DB-backed **sessions**), also serves the web UI from `wwwroot/`
-* `ai-service-prototype/` - Python (FastAPI) AI component: static repair recommendations for each problem report
+* `ai-service/` - the team's Python (FastAPI) AI service (from `feature/ai-service-setup`): documentation search + preliminary maintenance report
 * `backend/wwwroot/` - responsive SPA (vanilla JS, no build step)
 
 ## Run
 ```bash
-# 1) AI component (optional but recommended; set ANTHROPIC_API_KEY to use Claude, otherwise a built-in rule engine is used)
-cd ai-service-prototype && pip install -r requirements.txt && uvicorn main:app --port 8001
+# 1) AI service (team's, see ai-service/README.md): needs its own ai-service/.env (never commit it) and the CA certificate
+cd ai-service
+python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt     # Python 3.14 as in ai-service/README.md
+.venv/bin/python -m app.retrieval                                                # one-time download of the search model
+.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
-# 2) Backend + UI  (.NET 8 SDK)
-cd backend && dotnet run        # http://localhost:5000 (Development profile)
+# 2) Backend + UI  (.NET 8 SDK) - the key must equal LEMS_SERVICE_API_KEY in ai-service/.env
+cd backend
+dotnet user-secrets set "AiService:ServiceKey" "<value of LEMS_SERVICE_API_KEY>"
+dotnet run        # http://localhost:5000 (Development profile)
 ```
-Out of the box both databases are local SQLite files (`lems-core.db`, `lems-ops.db`) so it runs without any cloud account; tables are created and seeded on first start. If the AI service is down, reports are still created; the admin just sees "recommendations unavailable".
+Out of the box both LEMS databases are local SQLite files (`lems-core.db`, `lems-ops.db`), created and seeded on first start (delete them to re-seed). Without the AI service, problem reports are still created; the admin sees why the analysis is unavailable and can re-run it.
 
 Demo accounts exist **only in the Development environment** (default for `dotnet run`). In production set `Seed__AdminEmail` / `Seed__AdminPassword` for the first admin and `Security__RequireHttps=true`.
 
@@ -30,7 +33,7 @@ Students self-register with `name.surname@student.tuke.sk` (name/surname are tak
 | Equipment create / update / delete (double confirmation in UI) | `Api.cs`, `wwwroot/app.js` |
 | Booking: PENDING -> CONFIRMED -> IN_PROGRESS -> FINISHED, reject, cancel, 24h/start-time auto-cancel | `Api.cs`, `Services/Workers.cs` (`LifecycleWorker`, runs every 15 s) |
 | MAINTENANCE cascade (cancels PENDING+CONFIRMED, releases slots, notifies) | `Services/Domain.cs` |
-| Problem report -> AI analysis -> admin review -> repair -> close | `Api.cs` (`*Repair`), `Services/Workers.cs` (`AiClient`), `ai-service-prototype/main.py` |
+| Problem report -> AI analysis -> admin review -> repair -> close | `Api.cs` (`*Repair`), `Services/Workers.cs` (`AiClient`), `ai-service/app/` (team service) |
 | Dashboard feed, notifications (bell) | `Dashboard`, `ListNotifications` |
 
 A slot is "blocked" by any booking of that equipment in `PENDING`, `CONFIRMED` or `IN_PROGRESS`; moving to `REJECTED`/`CANCELED`/`FINISHED` releases it automatically (no separate slot table). Booking creation is serialized with a lock, so the same slot can't be double booked.
@@ -92,9 +95,17 @@ export Security__RequireHttps=true Seed__AdminEmail=... Seed__AdminPassword=...
 Known limits: no distributed transaction, so for a few seconds after a crash the two databases can disagree until the worker repairs it; the booking process lock and login throttle are per server instance (the database index and sessions already work across instances).
 
 ## Integration with the team AI service
-The branch `feature/ai-service-setup` contains the team's AI service (`ai-service/`) with a different contract:
-`POST /api/v1/maintenance/analyze` with `{ticket_id, equipment_id, problem_description}` returning a `report`
-(symptoms, possible_causes, recommended_checks, missing_information, documentation_*). The backend's `AiClient`
-(`backend/Services/Workers.cs`) currently calls the prototype's `POST /analyze` instead. To use the team's service,
-adapt `AiClient.AnalyzeAsync` to the new request/response shape and handle its 422/503 error envelope.
-This prototype lives in `ai-service-prototype/` so it does not collide with the team's `ai-service/` folder.
+| Item | Value |
+|---|---|
+| Endpoint called | `POST {AiService:BaseUrl}/api/v1/maintenance/analyze` (default base URL `http://127.0.0.1:8000`) |
+| Auth | header `X-Service-Key` = `AiService:ServiceKey` (backend) = `LEMS_SERVICE_API_KEY` (AI service). Set with `dotnet user-secrets` or env var `AiService__ServiceKey`; never in Git. |
+| Request | `ticket_id` = `REQ-<repair id>`, `equipment_id` = equipment **inventory number**, `problem_description` = title + description |
+| Timeout | 90 s, no automatic retries (a timeout may follow provider processing) |
+| Result | stored with the repair request (`ai_recommendations`): `{ok:true, report}` or `{ok:false, code, message}`; shown to admins only, with sources as links, marked "requires technician review" |
+| Re-run | admin button "Run AI analysis again" -> `POST /api/repairs/{id}/analyze` |
+
+**Equipment IDs must match the AI catalog.** The AI service looks the equipment up by ID in the shared Supabase catalog (demo IDs `PC-001, LAP-001, PRN-001, ROB-001, ARD-001, RPI-001, MUL-001`). The development seed uses exactly these IDs as inventory numbers. For other equipment the service answers `EQUIPMENT_NOT_FOUND`; the admin sees an explanation. Real inventory needs the same IDs in both systems (decide who owns the catalog).
+
+**Language.** The AI service works in English; the report form asks students to write in English.
+
+**Where the shared key and provider keys live.** The browser never sees them: browser -> C# backend -> AI service. Provider and database credentials stay in `ai-service/.env`.

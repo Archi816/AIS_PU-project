@@ -4,40 +4,59 @@ using Microsoft.Extensions.Options;
 
 namespace Lems;
 
-/// <summary>Talks to the Python AI component. Failures never break the main flow.</summary>
-public class AiClient(IHttpClientFactory factory, ILogger<AiClient> log)
+/// <summary>
+/// Client for the team's Python AI service (ai-service/, contract: ai-service/API_CONTRACT.md v0.7.0).
+/// POST {BaseUrl}/api/v1/maintenance/analyze with header X-Service-Key.
+/// Always returns JSON text to store with the repair request:
+///   { "ok": true,  "report": { ...the service's report... } }
+///   { "ok": false, "code": "MODEL_UNAVAILABLE", "message": "..." }
+/// Failures never break the main flow and are never retried automatically (the admin can re-run manually).
+/// </summary>
+public class AiClient(IHttpClientFactory factory, IConfiguration cfg, ILogger<AiClient> log)
 {
-    public async Task<string?> AnalyzeAsync(Equipment e, RepairRequest r)
+    static string Fail(string code, string message) => JsonSerializer.Serialize(new { ok = false, code, message });
+
+    public async Task<string> AnalyzeAsync(Equipment e, RepairRequest r)
     {
+        var key = cfg["AiService:ServiceKey"];
+        if (string.IsNullOrWhiteSpace(key))
+            return Fail("SERVICE_NOT_CONFIGURED", "AiService:ServiceKey is not set in the backend configuration.");
         try
         {
             var client = factory.CreateClient("ai");
-            var payload = new
+            using var req = new HttpRequestMessage(HttpMethod.Post, "/api/v1/maintenance/analyze");
+            req.Headers.Add("X-Service-Key", key);
+            req.Content = JsonContent.Create(new
             {
-                problem_title = r.Title,
-                problem_description = r.Description,
-                equipment = new
-                {
-                    inventory_number = e.InventoryNumber,
-                    title = e.Title,
-                    description = e.Description,
-                    category = e.Category,
-                    location = e.Location
-                }
-            };
-            var resp = await client.PostAsJsonAsync("/analyze", payload);
-            resp.EnsureSuccessStatusCode();
-            var json = await resp.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            var recs = root.GetProperty("recommendations").EnumerateArray().Select(x => x.GetString() ?? "").ToList();
-            var summary = root.GetProperty("summary").GetString() ?? "";
-            return JsonSerializer.Serialize(new { summary, recommendations = recs });
+                ticket_id = $"REQ-{r.Id}",
+                equipment_id = e.InventoryNumber,                      // must equal an ID in the AI service's equipment catalog
+                problem_description = $"{r.Title}. {r.Description}"    // max 4000 characters, English works best
+            });
+            using var resp = await client.SendAsync(req);
+            var body = await resp.Content.ReadAsStringAsync();
+            if (resp.IsSuccessStatusCode)
+            {
+                using var doc = JsonDocument.Parse(body);
+                return JsonSerializer.Serialize(new { ok = true, report = doc.RootElement.Clone() });
+            }
+            // handled errors look like {"error":{"code":"...","message":"..."}}
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                var err = doc.RootElement.GetProperty("error");
+                return Fail(err.GetProperty("code").GetString() ?? "UNKNOWN", err.GetProperty("message").GetString() ?? "");
+            }
+            catch { return Fail($"HTTP_{(int)resp.StatusCode}", "Unexpected answer from the AI service."); }
+        }
+        catch (TaskCanceledException)
+        {
+            log.LogWarning("AI service timed out");
+            return Fail("AI_TIMEOUT", "The AI service did not answer in time.");
         }
         catch (Exception ex)
         {
-            log.LogWarning("AI component unavailable: {Msg}", ex.Message);
-            return null;
+            log.LogWarning("AI service unreachable: {Msg}", ex.Message);
+            return Fail("AI_UNREACHABLE", "The AI service could not be reached.");
         }
     }
 }

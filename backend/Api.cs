@@ -118,6 +118,7 @@ public static class Api
         api.MapPost("/repairs/{id:int}/confirm", ConfirmRepair);
         api.MapPost("/repairs/{id:int}/dismiss", DismissRepair);
         api.MapPost("/repairs/{id:int}/complete", CompleteRepair);
+        api.MapPost("/repairs/{id:int}/analyze", AnalyzeRepair);
 
         api.MapGet("/notifications", ListNotifications);
         api.MapPost("/notifications/read-all", ReadAll);
@@ -602,20 +603,46 @@ public static class Api
         var fail = await TrySave(ops);
         if (fail != null) return fail;
 
-        var rid = rr.Id;   // AI analysis runs in the background - it must not delay the student
+        StartAnalysis(scopes, rr.Id);   // runs in the background - it must not delay the student
+        return Results.Ok(new { id = rr.Id });
+    }
+
+    /// <summary>Calls the AI service in the background and stores the result (report or error) with the request.</summary>
+    static void StartAnalysis(IServiceScopeFactory scopes, int repairId)
+    {
         _ = Task.Run(async () =>
         {
             using var scope = scopes.CreateScope();
-            var core2 = scope.ServiceProvider.GetRequiredService<CoreDb>();
-            var ops2 = scope.ServiceProvider.GetRequiredService<OpsDb>();
-            var ai = scope.ServiceProvider.GetRequiredService<AiClient>();
-            var r2 = await ops2.RepairRequests.FirstOrDefaultAsync(r => r.Id == rid);
-            var e2 = await core2.Equipment.FindAsync(req.EquipmentId);
-            if (r2 == null || e2 == null) return;
-            var json = await ai.AnalyzeAsync(e2, r2);
-            if (json != null) { r2.AiRecommendations = json; await ops2.SaveChangesAsync(); }
+            var log = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("Lems.Ai");
+            try
+            {
+                var core2 = scope.ServiceProvider.GetRequiredService<CoreDb>();
+                var ops2 = scope.ServiceProvider.GetRequiredService<OpsDb>();
+                var ai = scope.ServiceProvider.GetRequiredService<AiClient>();
+                var r2 = await ops2.RepairRequests.FirstOrDefaultAsync(r => r.Id == repairId);
+                if (r2 == null) return;
+                var e2 = await core2.Equipment.FindAsync(r2.EquipmentId);
+                if (e2 == null) return;
+                r2.AiRecommendations = await ai.AnalyzeAsync(e2, r2);
+                await ops2.SaveChangesAsync();
+            }
+            catch (Exception ex) { log.LogError(ex, "AI analysis for repair request {Id} failed", repairId); }
         });
-        return Results.Ok(new { id = rr.Id });
+    }
+
+    // Admin: run the AI analysis again (e.g. after a quota/timeout error). Never done automatically.
+    static async Task<IResult> AnalyzeRepair(int id, HttpContext http, OpsDb ops, IServiceScopeFactory scopes)
+    {
+        var me = Security.Current(http);
+        if (me == null) return Unauth();
+        if (me.Role != Role.ADMIN) return Forbidden();
+        var r = await ops.RepairRequests.FindAsync(id);
+        if (r == null) return NotFound("Repair request");
+        r.AiRecommendations = null;   // shows "being generated" until the new result arrives
+        var fail = await TrySave(ops);
+        if (fail != null) return fail;
+        StartAnalysis(scopes, id);
+        return Results.Ok(new { started = true });
     }
 
     // Problem confirmed -> MAINTENANCE + cancel affected bookings (BR-RP-05). Safe to repeat.

@@ -7,7 +7,7 @@ const fmt = d => new Date(d).toLocaleString('en-GB', { day: '2-digit', month: '2
 const fmtT = d => new Date(d).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 const label = s => String(s).replace(/_/g, ' ').toLowerCase().replace(/^\w/, c => c.toUpperCase());
 const badge = s => `<span class="badge b-${String(s).toLowerCase()}">${label(s)}</span>`;
-const ICONS = { Electronics: '🔌', Optics: '🔬', Chemistry: '🧪', Fabrication: '🛠️' };
+const ICONS = { Electronics: '🔌', Optics: '🔬', Chemistry: '🧪', Fabrication: '🛠️', Computing: '💻', Prototyping: '🖨️', Robotics: '🤖', Measurement: '📏' };
 const isAdmin = () => user?.role === 'ADMIN';
 const pad = n => String(n).padStart(2, '0');
 const ymd = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -223,7 +223,7 @@ async function bookModal(e, refresh) {
 function reportModal(e) {
   modal(`<h2>Report a problem</h2><p class="sub" style="margin-bottom:0">${esc(e.title)} (${esc(e.inventoryNumber)})</p>
     <label>Title</label><input id="rt" maxlength="50" placeholder="Short summary"><div id="e-title"></div>
-    <label>Description</label><textarea id="rd" rows="5" maxlength="500" placeholder="Describe what is wrong"></textarea><div id="e-desc"></div>
+    <label>Description (please write in English - the AI assistant works in English)</label><textarea id="rd" rows="5" maxlength="500" placeholder="Describe what is wrong"></textarea><div id="e-desc"></div>
     <div class="foot"><button class="btn" id="cx">Cancel</button><button class="btn primary" id="ok">Submit report</button></div>`, (m, close) => {
     m.querySelector('#cx').onclick = close;
     m.querySelector('#ok').onclick = async () => {
@@ -303,10 +303,33 @@ const STAGE = { AWAITING_REVIEW: 'Awaiting review', IN_REPAIR: 'In repair', RESO
 async function repairs(view) {
   const draw = async () => {
     const list = await api('/repairs');
+    const AI_HELP = {
+      EQUIPMENT_NOT_FOUND: 'This equipment ID is not in the AI service catalog, so no documentation could be used. Ask the AI service owner to add it, or fix the inventory number.',
+      UNAUTHORIZED: 'The backend key does not match the AI service key (AiService:ServiceKey vs LEMS_SERVICE_API_KEY).',
+      SERVICE_NOT_CONFIGURED: 'The service key is not configured (backend AiService:ServiceKey or AI service LEMS_SERVICE_API_KEY).',
+      MODEL_UNAVAILABLE: 'The language model did not answer (quota, timeout or invalid reply). Try again later.',
+      CATALOG_UNAVAILABLE: 'The AI service cannot reach its database. Check its console.',
+      RETRIEVAL_UNAVAILABLE: 'The AI service search model is not prepared. Check its console.',
+      NOT_READY: 'The AI service is not ready. Check its console and /ready.',
+      VALIDATION_ERROR: 'The AI service rejected the input.',
+      AI_UNREACHABLE: 'The AI service is not running or the address (AiService:BaseUrl) is wrong.',
+      AI_TIMEOUT: 'The AI service took too long to answer.'
+    };
+    const ul = (title, a) => a?.length ? `<div style="margin-top:6px"><b>${title}</b></div><ul>${a.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
     const aiBox = r => {
       if (!isAdmin()) return '';
-      if (!r.ai) return '<div class="ai pending">AI recommendations are being generated or are currently unavailable.</div>';
-      return `<div class="ai"><b>AI recommendations</b><div>${esc(r.ai.summary)}</div><ul>${r.ai.recommendations.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>`;
+      const again = `<div style="margin-top:6px"><button class="btn sm" data-a="analyze" data-id="${r.id}">Run AI analysis again</button></div>`;
+      if (!r.ai) return `<div class="ai pending">AI analysis is being generated (can take up to a minute)...${again}</div>`;
+      if (!r.ai.ok) return `<div class="ai pending"><b>AI analysis unavailable</b> (${esc(r.ai.code)})<div>${esc(AI_HELP[r.ai.code] || r.ai.message || '')}</div>${again}</div>`;
+      const p = r.ai.report || {};
+      const src = (p.documentation_sources || []).map(x => {
+        const label = esc(x.title || x.section || x.url);
+        const link = /^https?:\/\//i.test(x.url || '') ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${label}</a>` : label;
+        return `<li>${x.source_id ? `[${esc(x.source_id)}] ` : ''}${link}${x.page ? ` (p. ${esc(x.page)})` : ''}</li>`;
+      }).join('');
+      return `<div class="ai"><b>AI preliminary report</b> <small>(requires technician review)</small>
+        ${ul('Symptoms', p.symptoms)}${ul('Possible causes', p.possible_causes)}${ul('Recommended checks', p.recommended_checks)}${ul('Missing information', p.missing_information)}
+        ${src ? `<div style="margin-top:6px"><b>Documentation sources</b></div><ul>${src}</ul>` : '<div style="margin-top:6px"><small>No documentation sources were cited - the report is based on general knowledge.</small></div>'}${again}</div>`;
     };
     const actions = r => {
       if (!isAdmin() || r.status === 'CLOSED') return '';
@@ -323,7 +346,7 @@ async function repairs(view) {
       if (a === 'confirm' && !(await confirmBox('Confirm problem?', 'Equipment goes to MAINTENANCE and all pending/confirmed bookings are canceled.', 'Confirm', true))) return;
       try {
         const res = await api(`/repairs/${btn.dataset.id}/${a}`, 'POST', a === 'complete' ? { working: btn.dataset.w === 'true' } : undefined);
-        toast(a === 'complete' && res.repeated ? 'Repair cycle continues' : 'Request updated');
+        toast(a === 'analyze' ? 'AI analysis started - this can take up to a minute' : a === 'complete' && res.repeated ? 'Repair cycle continues' : 'Request updated');
       } catch (er) { if (!er.handled) toast(er.message, true); }
       draw();
     });

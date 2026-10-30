@@ -27,8 +27,8 @@ builder.Services.AddSingleton<LoginThrottle>();
 builder.Services.AddScoped<AiClient>();
 builder.Services.AddHttpClient("ai", c =>
 {
-    c.BaseAddress = new Uri(builder.Configuration["AiService:BaseUrl"] ?? "http://localhost:8001");
-    c.Timeout = TimeSpan.FromSeconds(30);
+    c.BaseAddress = new Uri(builder.Configuration["AiService:BaseUrl"] ?? "http://127.0.0.1:8000");
+    c.Timeout = TimeSpan.FromSeconds(90);   // provider timeout is 60 s plus search (API_CONTRACT.md)
 });
 builder.Services.AddHostedService<LifecycleWorker>();
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
@@ -77,15 +77,16 @@ static class Seed
                 new User { Name = "Jan", Surname = "Novak", Email = "jan.novak@student.tuke.sk", PasswordHash = Security.Hash("Student123!"), Role = Role.STUDENT });
             Equipment E(string inv, string t, string cat, string loc, string d) =>
                 new() { InventoryNumber = inv, Title = t, Category = cat, Location = loc, Description = d };
+            // Inventory numbers = equipment IDs of the AI service catalog (ai-service/data/equipment_seed.json),
+            // because the AI service looks the equipment up by this ID.
             core.Equipment.AddRange(
-                E("INV-001", "Digital Oscilloscope", "Electronics", "Lab A-101", "4-channel 200 MHz oscilloscope."),
-                E("INV-002", "Bench Power Supply", "Electronics", "Lab A-101", "Dual output 0-30 V / 5 A programmable supply."),
-                E("INV-003", "Optical Microscope", "Optics", "Lab B-204", "Binocular microscope with 4x-100x objectives."),
-                E("INV-004", "Spectrophotometer", "Chemistry", "Lab C-012", "UV-Vis spectrophotometer, 190-1100 nm."),
-                E("INV-005", "Centrifuge", "Chemistry", "Lab C-012", "Benchtop centrifuge up to 15 000 rpm."),
-                E("INV-006", "3D Printer", "Fabrication", "Lab D-003", "FDM printer, 220x220x250 mm build volume."),
-                E("INV-007", "Logic Analyzer", "Electronics", "Lab A-102", "16-channel USB logic analyzer."),
-                E("INV-008", "Laser Cutter", "Fabrication", "Lab D-003", "40 W CO2 laser cutter."));
+                E("PC-001", "Laboratory workstation", "Computing", "Computing Lab", "Desktop computer for laboratory work."),
+                E("LAP-001", "Student laptop", "Computing", "Loan Desk", "Laptop available for loan to students."),
+                E("PRN-001", "3D printer", "Prototyping", "Prototyping Lab", "FDM 3D printer."),
+                E("ROB-001", "Mobile robot", "Robotics", "Robotics Lab", "Educational mobile robot."),
+                E("ARD-001", "Arduino development kit", "Electronics", "Electronics Lab", "Arduino board with USB programmer and components."),
+                E("RPI-001", "Raspberry Pi kit", "Computing", "Electronics Lab", "Raspberry Pi single-board computer kit."),
+                E("MUL-001", "Digital multimeter", "Measurement", "Electronics Lab", "Handheld digital multimeter."));
             ops.Activity.Add(new ActivityEvent { Message = "LEMS has been initialised with sample laboratory equipment." });
             ops.SaveChanges();
         }
