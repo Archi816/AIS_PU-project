@@ -1,0 +1,93 @@
+[
+  {
+    "id": "PC-001",
+    "category": "computer",
+    "name": "Laboratory workstation",
+    "model": "Dell OptiPlex 7090 Micro",
+    "location": "Demo Computing Lab",
+    "condition": "operational",
+    "documentation_url": "https://www.dell.com/support/kbdoc/en-au/000186466/optiplex-7090-desktop-system-guide",
+    "documentation_text": "Startup and display symptoms — proposed OptiPlex 7090 Micro\nDell's OptiPlex 7090 family support guide separates startup, display and other troubleshooting topics. Project policy: distinguish no power, failure during startup self-test, failure to boot the OS, and a blank display. Record the power indicator and screen behaviour before attributing the issue to a component.\n\nDiagnostic indicators and errors — proposed OptiPlex 7090 Micro\nThe guide links diagnostic tests, error references and LED/beep information. Project policy: preserve the exact error and blink sequence. This summary contains no code-to-component lookup table; do not invent a decoded meaning. Review existing diagnostic results and confirm the exact Micro model before using another form factor's instructions.\n\nOverheating or device-specific issues — proposed OptiPlex 7090 Micro\nDell links separate thermal, storage and peripheral troubleshooting guidance. Project policy: record the workload, existing logs, OS and external connections relevant to the symptom. Do not infer CPU/RAM configuration, replace internal parts or perform firmware changes from this overview.",
+    "documentation_section": "Selected diagnostic topics; manufacturer summary and labelled project policy",
+    "documentation_verified_at": "2026-10-27",
+    "is_demo": true
+  },
+  {
+    "id": "LAP-001",
+    "category": "laptop",
+    "name": "Student laptop",
+    "model": "HP ProBook 450 G8",
+    "location": "Demo Equipment Loan Desk",
+    "condition": "operational",
+    "documentation_url": "https://support.hp.com/us-en/help/hp-pc-hardware-diagnostics",
+    "documentation_text": "Diagnostics in Windows — proposed HP ProBook 450 G8\nGeneral HP guidance describes HP PC Hardware Diagnostics Windows for checking hardware while Windows runs. Project policy: record the affected component and existing diagnostic result; confirm which tool is installed. This source is not a ProBook-specific service manual.\n\nWindows cannot start / UEFI diagnostics — proposed HP ProBook 450 G8\nHP also provides UEFI diagnostics outside the operating system to help distinguish hardware issues from software issues. Project policy: note whether the laptop powers on and whether the diagnostic environment is accessible. Do not claim that an inaccessible Windows desktop proves a hardware defect.\n\nFailure identification — proposed HP ProBook 450 G8\nHP asks for the diagnostic 24-digit failure ID and product number when arranging repair. Project policy: record these alongside the test name rather than inventing the meaning of the code. Review charging indicators and external adapter details if relevant; do not open the battery or reset Windows from this preliminary report.",
+    "documentation_section": "Selected diagnostic topics; manufacturer summary and labelled project policy",
+    "documentation_verified_at": "2026-10-27",
+    "is_demo": true
+  },
+  {
+    "id": "PRN-001",
+    "category": "3d_printer",
+    "name": "3D printer",
+    "model": "Creality Ender-3",
+    "location": "Demo Prototyping Lab",
+    "condition": "operational",
+    "documentation_url": "https://store.creality.com/blogs/all/ender-3-extruder-skipping",
+    "documentation_text": "Clicking and uneven extrusion — original Ender-3\nCreality describes extruder skipping as inconsistent filament feeding, with clicking or jumping movement, gaps and incomplete layers. Residue blocking the nozzle is one possible cause. Project policy: record the sound and visible feed behaviour; missing extrusion alone does not prove a nozzle clog.\n\nFilament slipping or deformed feed — original Ender-3\nToo much extruder tension can deform filament; too little may allow slipping. Project policy: record visible slipping and any recent changes for technician review. This preliminary report must not prescribe tension adjustment, disassembly or heating tests.\n\nFilament quality and moisture — original Ender-3\nInconsistent filament diameter, contamination and absorbed moisture can affect feeding and print quality. Project policy: record filament type, storage conditions, spool path and existing temperature/error readings. Do not invent temperature settings or assume that these extrusion symptoms explain unrelated power failures.",
+    "documentation_section": "Selected diagnostic topics; manufacturer summary and labelled project policy",
+    "documentation_verified_at": "2026-10-27",
+    "is_demo": true
+  },
+  {
+    "id": "ROB-001",
+    "category": "robot",
+    "name": "Mobile robot",
+    "model": "TurtleBot3 Burger",
+    "location": "Demo Robotics Lab",
+    "condition": "operational",
+    "documentation_url": "https://emanual.robotis.com/docs/en/platform/turtlebot3/bringup/",
+    "documentation_text": "Missing topics / ROS 2 discovery — TurtleBot3 Burger\nROBOTIS requires the remote PC and robot SBC to share a network environment, ROS_DOMAIN_ID and ROS middleware implementation. Multicast support affects discovery. Project policy: compare existing settings and network observations; do not automatically rewrite network configuration.\n\nMissing scan or odometry / bringup — TurtleBot3 Burger\nReview bringup output and inspect ros2 topic list. Published examples include /scan, /odom and /battery_state; available topics depend on software versions. Record the ROS distribution and burger model selection. Project policy: a missing scan topic alone is not evidence that the lidar hardware is broken.\n\nCommand type mismatch — TurtleBot3 Burger, ROS 2 Jazzy\nThe Jazzy instructions use TwistStamped for cmd_vel by default. Project policy: record the installed distribution and observed publisher/subscriber types before suggesting a compatibility issue. This report does not command robot motion, modify topics or flash firmware.",
+    "documentation_section": "Selected diagnostic topics; manufacturer summary and labelled project policy",
+    "documentation_verified_at": "2026-10-27",
+    "is_demo": true
+  },
+  {
+    "id": "ARD-001",
+    "category": "electronics",
+    "name": "Arduino development kit",
+    "model": "Arduino UNO R3",
+    "location": "Demo Electronics Lab",
+    "condition": "operational",
+    "documentation_url": "https://support.arduino.cc/hc/en-us/articles/4401874331410--Error-avrdude-when-uploading",
+    "documentation_text": "Upload handshake / programmer not responding — Arduino UNO R3\nFor stk500 upload failures, verify the board choice and serial port in Arduino IDE. A charging-only USB cable cannot transfer the sketch. A direct USB connection helps isolate hub issues. These checks do not establish a damaged bootloader. Record the complete avrdude error, OS and IDE version.\n\nMissing serial device / no such file — Arduino UNO R3\nThe selected port may disappear when the board is disconnected or assigned another port. Compare the current Tools > Port selection with the connected board. Project policy: observe device enumeration before changing configuration. Do not apply classic Nano processor-selection advice to UNO R3.\n\nPort busy / access denied — Arduino UNO R3\nAnother IDE instance, serial monitor or terminal can occupy the serial port. Check the selected port and close the competing application. Project policy: record the application and exact error; do not change system permissions indiscriminately. This material covers USB uploads, not all electronic faults.",
+    "documentation_section": "Selected diagnostic topics; manufacturer summary and labelled project policy",
+    "documentation_verified_at": "2026-10-27",
+    "is_demo": true
+  },
+  {
+    "id": "RPI-001",
+    "category": "computer",
+    "name": "Raspberry Pi kit",
+    "model": "Raspberry Pi 4 Model B",
+    "location": "Demo Electronics Lab",
+    "condition": "operational",
+    "documentation_url": "https://www.raspberrypi.com/documentation/computers/raspberry-pi.html",
+    "documentation_text": "Undervoltage / unexpected restarts — Raspberry Pi 4 Model B\nOfficial hardware documentation describes low-voltage warnings in the kernel log. Poor supplies and cables can cause unpredictable behaviour or storage corruption. Project policy: record the exact warning, external supply label, cable and attached USB devices. An unexpected restart alone does not prove undervoltage; review existing logs first.\n\nSlow performance / thermal throttling — Raspberry Pi 4 Model B\nRaspberry Pi reduces operating frequencies near its thermal limits. Project policy: record existing temperature readings, workload and cooling arrangement when investigating slowdown. Do not disable thermal protection or prescribe overclocking; distinguish recorded overheating from a guess.\n\nStorage and startup observations — Raspberry Pi 4 Model B\nClassic Raspberry Pi boards normally use removable microSD storage for the operating system and user data. Project policy: record storage type, OS version, exact boot display and LED pattern. Do not decode unverified blink codes or reimage storage without a backup and authorization. This is selected hardware guidance, not a complete boot-error manual.",
+    "documentation_section": "Selected diagnostic topics; manufacturer summary and labelled project policy",
+    "documentation_verified_at": "2026-10-27",
+    "is_demo": true
+  },
+  {
+    "id": "MUL-001",
+    "category": "measurement",
+    "name": "Digital multimeter",
+    "model": "Fluke 115",
+    "location": "Demo Electronics Lab",
+    "condition": "operational",
+    "documentation_url": "https://www.fluke.com/en/product/electrical-testing/digital-multimeters/fluke-115",
+    "documentation_text": "Unexpected readings / measurement mode — Fluke 115\nThe manufacturer's product overview lists true-RMS voltage/current, resistance, continuity, frequency and capacitance functions. Project policy: record the selected function, displayed unit and input sockets before suggesting meter failure. This source does not provide a diagnostic error-code table or a live-circuit test procedure.\n\nFluctuating readings / recording — Fluke 115\nThe meter includes Min/Max/Average recording. Project policy: record whether a displayed value is a recorded minimum, maximum or average, and preserve the observed value. Do not interpret every fluctuation as a defective instrument or prescribe new energized measurements.\n\nBlank display / visible damage — Fluke 115\nProject triage policy, not a manufacturer repair procedure: record display and battery-indicator observations and inspect disconnected leads externally. Remove visibly damaged equipment from use. Consult the model manual and qualified personnel for repair; this product overview does not justify fuse replacement, opening the meter or bypassing protection.",
+    "documentation_section": "Selected diagnostic topics; manufacturer summary and labelled project policy",
+    "documentation_verified_at": "2026-10-27",
+    "is_demo": true
+  }
+]
