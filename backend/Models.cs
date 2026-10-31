@@ -36,6 +36,14 @@ public class Equipment
     public DateTime CreatedAt { get; set; } = DateTime.Now;
 }
 
+public class EquipmentImage   // optional photo uploaded by an administrator (one per equipment)
+{
+    public int EquipmentId { get; set; }
+    [MaxLength(30)] public string ContentType { get; set; } = "image/jpeg";
+    public byte[] Data { get; set; } = Array.Empty<byte>();
+    public DateTime UpdatedAt { get; set; } = DateTime.Now;
+}
+
 public class UserSession   // server-side login session (cookie = random token, DB = its SHA-256)
 {
     public int Id { get; set; }
@@ -119,6 +127,7 @@ public class CoreDb(DbContextOptions<CoreDb> options) : DbContext(options)
     public DbSet<User> Users => Set<User>();
     public DbSet<Equipment> Equipment => Set<Equipment>();
     public DbSet<UserSession> UserSessions => Set<UserSession>();
+    public DbSet<EquipmentImage> EquipmentImages => Set<EquipmentImage>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder c)
     {
@@ -130,6 +139,8 @@ public class CoreDb(DbContextOptions<CoreDb> options) : DbContext(options)
     {
         mb.Entity<User>().HasIndex(u => u.Email).IsUnique();
         mb.Entity<Equipment>().HasIndex(e => e.InventoryNumber).IsUnique();
+        mb.Entity<EquipmentImage>().HasKey(i => i.EquipmentId);
+        mb.Entity<EquipmentImage>().HasOne<Equipment>().WithOne().HasForeignKey<EquipmentImage>(i => i.EquipmentId).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<UserSession>().HasIndex(x => x.TokenHash).IsUnique();
         mb.Entity<UserSession>().HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         ModelRules.SnakeColumns(mb);

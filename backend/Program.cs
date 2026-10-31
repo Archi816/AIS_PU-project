@@ -41,6 +41,14 @@ using (var scope = app.Services.CreateScope())
     var ops = scope.ServiceProvider.GetRequiredService<OpsDb>();
     core.Database.EnsureCreated();
     ops.Database.EnsureCreated();
+    // No migrations yet: EnsureCreated only builds a NEW database. Fail early with a clear message if an older one is in use.
+    try { _ = core.EquipmentImages.Any(); _ = core.UserSessions.Any(); _ = ops.Notifications.Any(); }
+    catch (Exception ex)
+    {
+        throw new InvalidOperationException("The database schema is older than this version (a table is missing). " +
+            "Development: stop the app and delete lems-core.db and lems-ops.db (they are re-created and re-seeded). " +
+            "Cloud databases: drop the LEMS tables or add migrations. Details: " + ex.Message, ex);
+    }
     Seed.Run(core, ops, app.Environment.IsDevelopment(), app.Configuration, app.Logger);
 }
 
@@ -59,7 +67,12 @@ app.Use(async (ctx, next) =>
 });
 
 app.UseDefaultFiles();
-app.UseStaticFiles();
+// The UI files change with every release: browsers must re-check them (ETag -> 304 when unchanged) instead of
+// reusing a stale copy for hours, which showed new HTML with an old stylesheet.
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = ctx => ctx.Context.Response.Headers["Cache-Control"] = "no-cache"
+});
 app.UseMiddleware<SessionMiddleware>();
 Api.Map(app);
 app.Run();

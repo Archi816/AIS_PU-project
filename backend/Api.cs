@@ -47,9 +47,10 @@ public static class Api
 
     static object UserDto(User u) => new { u.Id, u.Name, u.Surname, u.Email, role = u.Role };
 
-    static object EqDto(Equipment e) => new
+    static object EqDto(Equipment e, DateTime? imageUpdated = null) => new
     {
-        e.Id, inventoryNumber = e.InventoryNumber, e.Title, e.Description, e.Location, e.Category, e.Status, createdAt = e.CreatedAt
+        e.Id, inventoryNumber = e.InventoryNumber, e.Title, e.Description, e.Location, e.Category, e.Status, createdAt = e.CreatedAt,
+        hasImage = imageUpdated != null, imageVersion = imageUpdated?.Ticks ?? 0L
     };
 
     static object BookingDto(Booking b, Equipment? eq, User? u, Me me, DateTime now) => new
@@ -106,6 +107,9 @@ public static class Api
         api.MapPut("/equipment/{id:int}", UpdateEquipment);
         api.MapDelete("/equipment/{id:int}", DeleteEquipment);
         api.MapGet("/equipment/{id:int}/slots", Slots);
+        api.MapGet("/equipment/{id:int}/image", GetImage);
+        api.MapPut("/equipment/{id:int}/image", PutImage);
+        api.MapDelete("/equipment/{id:int}/image", DeleteImage);
 
         api.MapGet("/bookings", ListBookings);
         api.MapPost("/bookings", CreateBooking);
@@ -271,7 +275,9 @@ public static class Api
         var total = await filtered.CountAsync();
         var items = await filtered.Skip((pg - 1) * size).Take(size).ToListAsync();
         var categories = await core.Equipment.Select(e => e.Category).Distinct().OrderBy(c => c).ToListAsync();
-        return Results.Ok(new { items = items.Select(EqDto), total, page = pg, pageSize = size, counts, categories });
+        var ids = items.Select(i => i.Id).ToList();
+        var imgs = await core.EquipmentImages.Where(i => ids.Contains(i.EquipmentId)).Select(i => new { i.EquipmentId, i.UpdatedAt }).ToListAsync();
+        return Results.Ok(new { items = items.Select(e => EqDto(e, imgs.FirstOrDefault(i => i.EquipmentId == e.Id)?.UpdatedAt)), total, page = pg, pageSize = size, counts, categories });
     }
 
     /// <summary>Activity events are best-effort: the main change is already committed in Core.</summary>
@@ -349,7 +355,8 @@ public static class Api
         // Ops: cancellations, notifications, events. If this fails the admin can repeat the action (idempotent).
         var fail = await TrySave(ops);
         if (fail != null) return fail;
-        return Results.Ok(EqDto(eq));
+        var img = await core.EquipmentImages.AsNoTracking().Where(i => i.EquipmentId == id).Select(i => (DateTime?)i.UpdatedAt).FirstOrDefaultAsync();
+        return Results.Ok(EqDto(eq, img));
     }
 
     static async Task<IResult> DeleteEquipment(int id, HttpContext http, CoreDb core, OpsDb ops)
@@ -388,6 +395,68 @@ public static class Api
             warning = "Equipment deleted; related records will be cleaned up shortly.";
         }
         return Results.Ok(new { ok = true, warning });
+    }
+
+    // ---------- equipment photo (stored in the Core database) ----------
+    const int MaxImageBytes = 1_500_000;
+
+    /// <summary>Accepts only real PNG / JPEG / WebP data (checked by content, never by the client's word). SVG is refused on purpose (script risk).</summary>
+    static string? SniffImage(byte[] d)
+    {
+        if (d.Length > 12 && d[0] == 0x89 && d[1] == 0x50 && d[2] == 0x4E && d[3] == 0x47) return "image/png";
+        if (d.Length > 3 && d[0] == 0xFF && d[1] == 0xD8 && d[2] == 0xFF) return "image/jpeg";
+        if (d.Length > 12 && d[0] == 'R' && d[1] == 'I' && d[2] == 'F' && d[3] == 'F' && d[8] == 'W' && d[9] == 'E' && d[10] == 'B' && d[11] == 'P') return "image/webp";
+        return null;
+    }
+
+    static async Task<IResult> GetImage(int id, HttpContext http, CoreDb core)
+    {
+        if (Security.Current(http) == null) return Unauth();
+        var img = await core.EquipmentImages.AsNoTracking().FirstOrDefaultAsync(i => i.EquipmentId == id);
+        if (img == null) return Results.NotFound();
+        http.Response.Headers["Cache-Control"] = "private, max-age=86400";   // the URL carries ?v=<version>, so a new upload gets a new URL
+        return Results.Bytes(img.Data, img.ContentType);
+    }
+
+    static async Task<IResult> PutImage(int id, HttpContext http, CoreDb core, OpsDb ops)
+    {
+        var me = Security.Current(http);
+        if (me == null) return Unauth();
+        if (me.Role != Role.ADMIN) return Forbidden();
+        var eq = await core.Equipment.FindAsync(id);
+        if (eq == null) return NotFound("Equipment");
+        if (http.Request.ContentLength > MaxImageBytes) return Err(413, "Image too large (max 1.5 MB)");
+
+        using var ms = new MemoryStream();
+        var buffer = new byte[8192];
+        int n, total = 0;
+        while ((n = await http.Request.Body.ReadAsync(buffer)) > 0)
+        {
+            total += n;
+            if (total > MaxImageBytes) return Err(413, "Image too large (max 1.5 MB)");
+            ms.Write(buffer, 0, n);
+        }
+        var data = ms.ToArray();
+        var type = SniffImage(data);
+        if (type == null) return Err(400, "Only PNG, JPEG or WebP images are allowed");
+
+        var row = await core.EquipmentImages.FindAsync(id);
+        if (row == null) core.EquipmentImages.Add(new EquipmentImage { EquipmentId = id, ContentType = type, Data = data, UpdatedAt = DateTime.Now });
+        else { row.ContentType = type; row.Data = data; row.UpdatedAt = DateTime.Now; }
+        var fail = await TrySave(core);
+        if (fail != null) return fail;
+        new Domain(core, ops).Activity($"The following details of equipment {eq.Title} (Inventory No.: {eq.InventoryNumber}) have been updated: photo at {eq.Location}.");
+        await PublishAsync(http, ops);
+        return Results.Ok(new { ok = true });
+    }
+
+    static async Task<IResult> DeleteImage(int id, HttpContext http, CoreDb core)
+    {
+        var me = Security.Current(http);
+        if (me == null) return Unauth();
+        if (me.Role != Role.ADMIN) return Forbidden();
+        await core.EquipmentImages.Where(i => i.EquipmentId == id).ExecuteDeleteAsync();
+        return Results.Ok(new { ok = true });
     }
 
     static async Task<IResult> Slots(int id, string? date, HttpContext http, CoreDb core, OpsDb ops, IOptions<LemsOptions> opt)

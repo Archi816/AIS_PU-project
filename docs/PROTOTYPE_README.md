@@ -109,3 +109,19 @@ Known limits: no distributed transaction, so for a few seconds after a crash the
 **Language.** The AI service works in English; the report form asks students to write in English.
 
 **Where the shared key and provider keys live.** The browser never sees them: browser -> C# backend -> AI service. Provider and database credentials stay in `ai-service/.env`.
+
+## Testing
+| Layer | How | Status |
+|---|---|---|
+| Frontend smoke tests (jsdom, mocked API) | `cd tests/frontend && npm install && npm test` | 13 tests: both roles x all pages, XSS escaping, unsafe-link blocking, AI report states, booking dialog, role-based buttons. Mutation-checked. |
+| AI service | his console and `/ready` (see `ai-service/README.md`) | manual |
+| Backend (C#) | not yet automated | planned: xUnit + `WebApplicationFactory` with in-memory SQLite for both databases and a fake AI service |
+
+## Frontend look
+Navy brand header with a gold rule, serif headings, white cards, status colours. All colours are CSS variables at the top of
+`backend/wwwroot/styles.css` (`:root`), so an official university palette or logo can be applied in one place.
+
+## Equipment pictures
+* Every equipment card shows a **vector illustration** chosen from the title/category (`backend/wwwroot/art.js`: 3D printer, Arduino, multimeter, laptop, workstation, robot, Raspberry Pi, oscilloscope, microscope, generic toolbox). Add a new picture by adding an entry to `ART` and a keyword rule in `equipmentArt`.
+* Administrators can upload a **real photo** per equipment (Edit/Add form -> Photo): PNG, JPEG or WebP; the browser shrinks it to max 900 px JPEG, the server accepts max 1.5 MB and checks the file content (SVG is refused on purpose). It is stored in the Core database (`EquipmentImages`, `varbinary`/`BLOB`), so it works with several servers and in the cloud. Removing the photo brings the illustration back.
+* **Schema change:** this adds the table `EquipmentImages`. There are no migrations yet - for a development database delete `lems-core.db` and `lems-ops.db` once.

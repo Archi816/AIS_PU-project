@@ -7,7 +7,6 @@ const fmt = d => new Date(d).toLocaleString('en-GB', { day: '2-digit', month: '2
 const fmtT = d => new Date(d).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 const label = s => String(s).replace(/_/g, ' ').toLowerCase().replace(/^\w/, c => c.toUpperCase());
 const badge = s => `<span class="badge b-${String(s).toLowerCase()}">${label(s)}</span>`;
-const ICONS = { Electronics: '🔌', Optics: '🔬', Chemistry: '🧪', Fabrication: '🛠️', Computing: '💻', Prototyping: '🖨️', Robotics: '🤖', Measurement: '📏' };
 const isAdmin = () => user?.role === 'ADMIN';
 const pad = n => String(n).padStart(2, '0');
 const ymd = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -32,9 +31,14 @@ function clearTimers() { timers.forEach(clearInterval); timers = []; }
 /* ---------- modal ---------- */
 function modal(html, onMount) {
   const ov = document.createElement('div'); ov.className = 'ov';
-  ov.innerHTML = `<div class="modal">${html}</div>`;
-  ov.addEventListener('mousedown', e => { if (e.target === ov) ov.remove(); });
-  document.body.append(ov); onMount?.(ov.firstChild, () => ov.remove()); return ov;
+  ov.innerHTML = `<div class="modal" role="dialog" aria-modal="true">${html}</div>`;
+  const close = () => { ov.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = e => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  ov.addEventListener('mousedown', e => { if (e.target === ov) close(); });
+  document.body.append(ov); onMount?.(ov.firstChild, close);
+  ov.querySelector('input:not([disabled]),textarea,select')?.focus();
+  return ov;
 }
 function confirmBox(title, text, okLabel, danger) {
   return new Promise(resolve => modal(`<h2>${esc(title)}</h2><p>${esc(text)}</p>
@@ -47,8 +51,11 @@ const fieldErr = (f, k) => f?.[k] ? `<div class="err">${esc(f[k])}</div>` : '';
 function showAuth(mode, errors = {}, msg = '', vals = {}) {
   clearTimers();
   const reg = mode === 'register';
-  $app.innerHTML = `<div class="auth"><div class="card">
-    <div class="logo"><i>🔬</i> LEMS</div><p class="sub" style="text-align:center">Laboratory Equipment Management System</p>
+  $app.innerHTML = `<div class="auth"><section class="hero"><div class="mark">L</div>
+      <h1>Laboratory Equipment<br>Management System</h1>
+      <p>Reserve laboratory equipment, follow every decision and report faults - all in one place.</p>
+      <ul><li>Book equipment in one-hour slots</li><li>Get notified about approvals and changes</li><li>Report problems with AI-assisted triage for technicians</li></ul></section>
+    <section class="formwrap"><div class="card">
     <h2>${reg ? 'Create student account' : 'Log in'}</h2>
     <label>Email</label><input id="email" type="email" value="${esc(vals.email)}" placeholder="${reg ? 'name.surname@student.tuke.sk' : 'you@example.com'}">${fieldErr(errors, 'email')}
     <label>Password</label><input id="pw" type="password">${fieldErr(errors, 'password')}
@@ -56,7 +63,8 @@ function showAuth(mode, errors = {}, msg = '', vals = {}) {
     ${msg ? `<div class="alert">${esc(msg)}</div>` : ''}
     <button class="btn primary" id="go" style="width:100%;margin-top:18px">${reg ? 'Create Account' : 'Log In'}</button>
     <div class="alt">${reg ? 'Have an account? <a id="sw">Log in</a>' : 'New student? <a id="sw">Create an account</a>'}</div>
-  </div></div>`;
+  </div></div></section></div>`;
+  document.getElementById('email')?.focus();
   const val = id => document.getElementById(id)?.value ?? '';
   const submit = async () => {
     const email = val('email');
@@ -71,25 +79,39 @@ function showAuth(mode, errors = {}, msg = '', vals = {}) {
 }
 
 /* ---------- shell ---------- */
-const NAV = () => isAdmin()
-  ? [['dashboard', '🏠', 'Dashboard'], ['equipment', '🧰', 'Equipment'], ['bookings', '📅', 'Bookings'], ['repairs', '🛠️', 'Repair Requests']]
-  : [['dashboard', '🏠', 'Dashboard'], ['equipment', '🧰', 'Equipment'], ['bookings', '📅', 'Bookings'], ['repairs', '🛠️', 'Repair Requests']];
+const svg = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const ICON = {
+  dashboard: svg('<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/>'),
+  equipment: svg('<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 012-2h4a2 2 0 012 2v2"/><path d="M3 13h18"/>'),
+  bookings: svg('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>'),
+  repairs: svg('<rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4h6v3H9zM9 12h6M9 16h4"/>'),
+  bell: svg('<path d="M6 9a6 6 0 0112 0c0 6 2 7 2 7H4s2-1 2-7"/><path d="M10 20a2 2 0 004 0"/>')
+};
+const NAV = () => [['dashboard', 'Dashboard'], ['equipment', 'Equipment'], ['bookings', 'Bookings'], ['repairs', 'Repair Requests']];
 
 function shell(page) {
   const ini = (user.name[0] + user.surname[0]).toUpperCase();
   $app.innerHTML = `<div class="shell">
-    <aside class="side"><div class="logo"><i>🔬</i> LEMS</div>
-      <nav class="nav">${NAV().map(([k, ic, t]) => `<a href="#/${k}" class="${k === page ? 'active' : ''}">${ic} ${t}</a>`).join('')}</nav></aside>
-    <div class="main"><header class="top">
-      <div class="rel"><button class="bell" id="bell">🔔<span class="badge-n" id="nbadge" hidden>0</span></button><div class="drop notes" id="notes" hidden></div></div>
-      <div class="rel"><button class="acct" id="acct"><span class="avatar">${esc(ini)}</span><b>${esc(user.name)} ${esc(user.surname)}</b> ▾</button>
-        <div class="drop" id="menu" hidden><div class="it"><small style="color:var(--muted)">Account role</small><br><b>${isAdmin() ? 'Administrator' : 'Student'}</b></div>
+    <header class="top">
+      <button class="burger" id="burger" aria-label="Open menu">☰</button>
+      <a class="brand" href="#/dashboard"><span class="mark">L</span><span><b>LEMS</b><small>Laboratory Equipment Management</small></span></a>
+      <div class="grow"></div>
+      <div class="rel"><button class="bell" id="bell" aria-label="Notifications">${ICON.bell}<span class="badge-n" id="nbadge" hidden>0</span></button><div class="drop notes" id="notes" hidden></div></div>
+      <div class="rel"><button class="acct" id="acct" aria-label="Account menu"><span class="avatar">${esc(ini)}</span><span class="who"><b>${esc(user.name)} ${esc(user.surname)}</b><span class="role">${isAdmin() ? 'Administrator' : 'Student'}</span></span></button>
+        <div class="drop" id="menu" hidden><div class="it"><small>Signed in as</small><br><b>${esc(user.email)}</b><br><small>${isAdmin() ? 'Administrator' : 'Student'}</small></div>
         <div class="it"><button class="btn" id="logout" style="width:100%">Log out</button></div></div></div>
-    </header><main class="content" id="view"></main></div></div>`;
-  const notes = document.getElementById('notes'), menu = document.getElementById('menu');
+    </header>
+    <div class="body">
+      <aside class="side" id="side"><nav class="nav">${NAV().map(([k, t]) => `<a href="#/${k}" class="${k === page ? 'active' : ''}">${ICON[k]}<span>${t}</span></a>`).join('')}</nav>
+        <div class="side-foot">LEMS prototype<br>Unofficial draft</div></aside>
+      <main class="content" id="view" tabindex="-1"></main>
+    </div></div>`;
+  const notes = document.getElementById('notes'), menu = document.getElementById('menu'), side = document.getElementById('side');
+  document.getElementById('burger').onclick = e => { e.stopPropagation(); side.classList.toggle('open'); };
+  side.onclick = () => side.classList.remove('open');
   document.getElementById('bell').onclick = async e => { e.stopPropagation(); menu.hidden = true; notes.hidden = !notes.hidden; if (!notes.hidden) { await loadNotes(true); } };
   document.getElementById('acct').onclick = e => { e.stopPropagation(); notes.hidden = true; menu.hidden = !menu.hidden; };
-  document.onclick = () => { notes.hidden = true; menu.hidden = true; };
+  document.onclick = () => { notes.hidden = true; menu.hidden = true; side.classList.remove('open'); };
   notes.onclick = e => e.stopPropagation();
   document.getElementById('logout').onclick = async () => { await api('/auth/logout', 'POST'); user = null; showAuth('login'); };
   loadNotes(false); timers.push(setInterval(() => loadNotes(false), 15000));
@@ -113,20 +135,30 @@ async function route() {
   const page = (location.hash.replace('#/', '') || 'dashboard').split('?')[0];
   const pages = { dashboard, equipment, bookings, repairs };
   clearTimers(); shell(pages[page] ? page : 'dashboard');
-  await (pages[page] || dashboard)(document.getElementById('view'));
+  const view = document.getElementById('view');
+  view.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
+  await (pages[page] || dashboard)(view);
 }
 window.addEventListener('hashchange', route);
 
 /* ---------- dashboard ---------- */
 async function dashboard(view) {
   const draw = async () => {
-    let d; try { d = await api('/dashboard'); } catch { return; }
-    const stat = (n, l, badgeCls) => `<div class="card stat"><div class="n">${n}</div><div class="l">${l}</div></div>`;
+    let d, mine = [];
+    try { d = await api('/dashboard'); if (!isAdmin()) mine = await api('/bookings'); } catch { return; }
+    const stat = (n, l, cls, href) => `<${href ? `a href="${href}"` : 'div'} class="card stat ${cls || ''}"><div class="n">${n}</div><div class="l">${l}</div></${href ? 'a' : 'div'}>`;
+    const now = Date.now();
+    const upcoming = mine.filter(b => ['PENDING', 'CONFIRMED', 'IN_PROGRESS'].includes(b.status) && new Date(b.end) > now).sort((a, b) => new Date(a.start) - new Date(b.start)).slice(0, 4);
+    const todo = (n, text, href) => `<a class="todo" href="${href}"><span>${text}</span><span class="num ${n ? '' : 'zero'}">${n}</span></a>`;
+    const side = isAdmin()
+      ? `<div class="card"><h2>Needs your attention</h2>${todo(d.admin.pendingBookings, 'Booking requests waiting for a decision', '#/bookings')}${todo(d.admin.repairsOpen, 'Open repair requests', '#/repairs')}${todo(d.equipment.maintenance, 'Equipment under maintenance', '#/equipment')}</div>`
+      : `<div class="card"><h2>Your upcoming bookings</h2>${upcoming.length ? upcoming.map(b => `<a class="todo" href="#/bookings"><span><b>${esc(b.equipmentTitle)}</b><br><small>${fmt(b.start)}</small></span>${badge(b.status)}</a>`).join('') : '<div class="empty" style="padding:22px 0"><b>Nothing booked</b>Reserve equipment on the Equipment page.</div>'}</div>`;
     view.innerHTML = `<h1>Dashboard</h1><p class="sub">Overview of laboratory equipment and recent activity.</p>
-      <div class="grid g4">${stat(d.equipment.available, 'Available equipment')}${stat(d.equipment.reserved, 'Reserved equipment')}${stat(d.equipment.maintenance, 'Under maintenance')}${stat(d.equipment.total, 'Total equipment')}</div>
-      ${d.admin ? `<div class="grid g4" style="margin-top:16px">${stat(d.admin.repairsOpen, 'Open repair requests')}${stat(d.admin.repairsClosed, 'Closed repair requests')}${stat(d.admin.students, 'Students')}${stat(d.admin.admins, 'Administrators')}</div>` : ''}
-      <div class="card feed" style="margin-top:20px"><h2>Activity feed</h2>
-      ${d.feed.length ? d.feed.map(e => `<div class="ev">${esc(e.message)}<small>${fmt(e.createdAt)}</small></div>`).join('') : '<div class="empty">No activity yet</div>'}</div>`;
+      <div class="grid g4">${stat(d.equipment.available, 'Available equipment', 'ok', '#/equipment')}${stat(d.equipment.reserved, 'Reserved right now', 'warn', '#/equipment')}${stat(d.equipment.maintenance, 'Under maintenance', 'bad', '#/equipment')}${stat(d.equipment.total, 'Total equipment', '', '#/equipment')}</div>
+      ${d.admin ? `<div class="grid g4" style="margin-top:18px">${stat(d.admin.repairsOpen, 'Open repair requests', 'warn', '#/repairs')}${stat(d.admin.repairsClosed, 'Closed repair requests', 'ok', '#/repairs')}${stat(d.admin.students, 'Students', 'gold')}${stat(d.admin.admins, 'Administrators', 'gold')}</div>` : ''}
+      <div class="grid g2" style="margin-top:22px">
+        <div class="card feed"><h2>Activity feed</h2>${d.feed.length ? d.feed.map(e => `<div class="ev">${esc(e.message)}<small>${fmt(e.createdAt)}</small></div>`).join('') : '<div class="empty"><b>No activity yet</b>Changes to equipment and reservations appear here.</div>'}</div>
+        ${side}</div>`;
   };
   await draw(); timers.push(setInterval(draw, 10000));
 }
@@ -145,7 +177,7 @@ async function equipment(view) {
         <select id="cat"><option value="">All categories</option>${d.categories.map(c => `<option ${c === eqState.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
         <select id="sort">${[['name', 'Sort: Name'], ['inventory', 'Sort: Inventory no.'], ['status', 'Sort: Status'], ['newest', 'Sort: Newest']].map(([v, t]) => `<option value="${v}" ${eqState.sort === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
       <div class="tabs">${tab('', 'All Equipment', d.counts.all)}${tab('AVAILABLE', 'Available', d.counts.available)}${tab('RESERVED', 'Reserved', d.counts.reserved)}${tab('MAINTENANCE', 'Maintenance', d.counts.maintenance)}</div>
-      ${d.items.length ? `<div class="grid g3">${d.items.map(card).join('')}</div>` : '<div class="card empty">No equipment found</div>'}
+      ${d.items.length ? `<div class="grid g3">${d.items.map(card).join('')}</div>` : '<div class="card empty"><b>No equipment found</b>Try another search or filter.</div>'}
       <div class="pager"><span>Showing ${d.items.length} of ${d.total} items</span><div>
         <button class="btn sm" id="prev" ${eqState.page <= 1 ? 'disabled' : ''}>‹ Prev</button><span style="padding:4px 8px">Page ${d.page} / ${pages}</span>
         <button class="btn sm" id="next" ${eqState.page >= pages ? 'disabled' : ''}>Next ›</button></div></div>`;
@@ -168,12 +200,33 @@ async function equipment(view) {
   timers.push(setInterval(() => { if (!document.querySelector('.ov') && document.activeElement?.id !== 'q') draw().catch(() => { }); }, 15000));
 }
 
+const thumb = e => e.hasImage
+  ? `<img class="photo" src="/api/equipment/${e.id}/image?v=${e.imageVersion}" alt="Photo of ${esc(e.title)}" loading="lazy">`
+  : (typeof equipmentArt === 'function' ? equipmentArt(e) : '');
+
+/* Photos: shrink in the browser (max 900 px, JPEG) before upload, so files stay small and uniform. */
+async function shrinkImage(file, max = 900) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('This file is not a valid image')); i.src = url; });
+    const k = Math.min(1, max / Math.max(img.width, img.height));
+    const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+    const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height); ctx.drawImage(img, 0, 0, c.width, c.height);
+    return await new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('Could not process the image')), 'image/jpeg', 0.85));
+  } finally { URL.revokeObjectURL(url); }
+}
+async function uploadPhoto(id, file) {
+  const blob = await shrinkImage(file);
+  const res = await fetch(`/api/equipment/${id}/image`, { method: 'PUT', headers: { 'Content-Type': 'image/jpeg', 'X-Requested-With': 'LEMS' }, body: blob });
+  if (!res.ok) { let m = 'Photo upload failed'; try { m = (await res.json()).error || m; } catch { } throw { message: m, fields: {} }; }
+}
+
 function card(e) {
   const maint = e.status === 'MAINTENANCE';
   const acts = isAdmin()
     ? `<button class="btn" data-act="edit" data-id="${e.id}">Edit</button><button class="btn danger" data-act="del" data-id="${e.id}">Remove</button>`
     : `<button class="btn primary" data-act="book" data-id="${e.id}" ${maint ? 'disabled title="Equipment is under maintenance"' : ''}>Book</button><button class="btn" data-act="report" data-id="${e.id}">Report Issue</button>`;
-  return `<div class="card eq"><div class="thumb">${ICONS[e.category] || '🧰'}</div><h3>${esc(e.title)}</h3>
+  return `<div class="card eq st-${e.status}"><div class="thumb">${thumb(e)}</div><h3>${esc(e.title)}</h3>
     <div class="meta">Inv. No.: ${esc(e.inventoryNumber)}</div><div class="meta">📍 ${esc(e.location)} · ${esc(e.category)}</div>
     <div class="row">${badge(e.status)}</div><div class="acts">${acts}</div></div>`;
 }
@@ -247,15 +300,32 @@ function equipmentForm(e, refresh) {
     ${e ? `<label>Status</label>${v.status === 'RESERVED'
       ? '<input value="Reserved (in use right now - managed automatically)" disabled>'
       : `<select id="f-status"><option value="AVAILABLE" ${v.status === 'AVAILABLE' ? 'selected' : ''}>Available</option><option value="MAINTENANCE" ${v.status === 'MAINTENANCE' ? 'selected' : ''}>Maintenance (cancels pending & confirmed bookings)</option></select>`}` : ''}
+    <label>Photo (optional - PNG, JPEG or WebP)</label>
+    <div class="photo-row"><div class="photo-prev" id="prev">${thumb(v)}</div>
+      <div><input type="file" id="f-photo" accept="image/png,image/jpeg,image/webp">
+      ${e?.hasImage ? '<button type="button" class="btn sm danger" id="rm-photo" style="margin-top:8px">Remove photo</button>' : ''}<div id="e-photo"></div></div></div>
     <div id="e-gen"></div><div class="foot"><button class="btn" id="cx">Cancel</button><button class="btn primary" id="ok">Save</button></div>`, (m, close) => {
+    let removePhoto = false;
     m.querySelector('#cx').onclick = close;
+    m.querySelector('#f-photo').onchange = ev => {
+      const f = ev.target.files[0]; if (!f) return;
+      removePhoto = false; m.querySelector('#prev').innerHTML = `<img class="photo" alt="" src="${URL.createObjectURL(f)}">`;
+    };
+    const rm = m.querySelector('#rm-photo');
+    if (rm) rm.onclick = () => { removePhoto = true; m.querySelector('#f-photo').value = ''; m.querySelector('#prev').innerHTML = equipmentArt(v); rm.remove(); };
     m.querySelector('#ok').onclick = async () => {
       const g = id => m.querySelector('#f-' + id)?.value;
       const body = { inventoryNumber: g('inventoryNumber'), title: g('title'), category: g('category'), location: g('location'), description: g('description'), status: g('status') ?? v.status };
       if (e && body.status === 'MAINTENANCE' && v.status !== 'MAINTENANCE' && !(await confirmBox('Place under maintenance?', 'All pending and confirmed bookings of this equipment will be canceled and students notified.', 'Continue', true))) return;
       try {
-        await api(e ? `/equipment/${e.id}` : '/equipment', e ? 'PUT' : 'POST', body);
-        close(); toast(e ? 'Equipment updated' : 'Equipment created'); refresh();
+        const saved = await api(e ? `/equipment/${e.id}` : '/equipment', e ? 'PUT' : 'POST', body);
+        const file = m.querySelector('#f-photo').files[0];
+        let photoError = '';
+        try {
+          if (file) await uploadPhoto(saved.id, file);
+          else if (removePhoto && e) await api(`/equipment/${e.id}/image`, 'DELETE');
+        } catch (pe) { photoError = pe.message || 'Photo could not be saved'; }
+        close(); toast(photoError ? `Saved, but the photo failed: ${photoError}` : (e ? 'Equipment updated' : 'Equipment created'), !!photoError); refresh();
       } catch (er) {
         if (er.handled) return;   // form stays open with its data (BR-EQ-C-05)
         ['inventoryNumber', 'title', 'category', 'location', 'description'].forEach(k => m.querySelector('#e-' + k).innerHTML = fieldErr(er.fields, k));
@@ -280,12 +350,12 @@ async function bookings(view) {
     const statuses = ['PENDING', 'CONFIRMED', 'IN_PROGRESS', 'FINISHED', 'REJECTED', 'CANCELED'];
     view.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:start"><div><h1>Bookings</h1><p class="sub">${isAdmin() ? 'Review and manage booking requests.' : 'Track and cancel your bookings. Create new ones from the Equipment page.'}</p></div>
       <select id="flt" style="width:180px"><option value="">All statuses</option>${statuses.map(s => `<option value="${s}" ${filter === s ? 'selected' : ''}>${label(s)}</option>`).join('')}</select></div>
-      <div class="card" style="padding:6px 10px;overflow:auto">${list.length ? `<table><thead><tr><th>Equipment</th>${isAdmin() ? '<th>Student</th>' : ''}<th>Time</th><th>Purpose</th><th>Status</th><th></th></tr></thead><tbody>
+      <div class="card tbl">${list.length ? `<table><thead><tr><th>Equipment</th>${isAdmin() ? '<th>Student</th>' : ''}<th>Time</th><th>Purpose</th><th>Status</th><th></th></tr></thead><tbody>
       ${list.map(b => `<tr><td><b>${esc(b.equipmentTitle)}</b><br><small>${esc(b.inventoryNumber)} · ${esc(b.location)}</small></td>
         ${isAdmin() ? `<td>${esc(b.studentName)}<br><small>${esc(b.studentEmail)}</small></td>` : ''}
         <td>${fmt(b.start)}–${fmtT(b.end)}</td><td>${esc(b.description)}</td><td>${badge(b.status)}</td>
         <td><div class="acts-cell">${b.canDecide ? `<button class="btn sm primary" data-a="approve" data-id="${b.id}">Approve</button><button class="btn sm danger" data-a="reject" data-id="${b.id}">Reject</button>` : ''}
-        ${b.canCancel ? `<button class="btn sm" data-a="cancel" data-id="${b.id}">Cancel</button>` : ''}</div></td></tr>`).join('')}</tbody></table>` : '<div class="empty">No bookings</div>'}</div>`;
+        ${b.canCancel ? `<button class="btn sm" data-a="cancel" data-id="${b.id}">Cancel</button>` : ''}</div></td></tr>`).join('')}</tbody></table>` : '<div class="empty"><b>No bookings</b>Nothing matches this filter.</div>'}</div>`;
     document.getElementById('flt').onchange = e => { filter = e.target.value; draw(); };
     view.querySelectorAll('[data-a]').forEach(btn => btn.onclick = async () => {
       const a = btn.dataset.a;
@@ -339,8 +409,8 @@ async function repairs(view) {
     };
     view.innerHTML = `<h1>Repair Requests</h1><p class="sub">${isAdmin() ? 'Review reported problems and track repairs.' : 'Problems you reported. Use "Report Issue" on the Equipment page to create one.'}</p>
       ${list.length ? list.map(r => `<div class="card rep"><div class="head"><div><b>${esc(r.title)}</b><div class="sub" style="margin:0">${esc(r.equipmentTitle)} (${esc(r.inventoryNumber)}) · ${esc(r.location)}${isAdmin() ? ` · by ${esc(r.reporter)}` : ''} · ${fmt(r.createdAt)}</div></div>
-        <div style="text-align:right">${badge(r.status)} ${badge(r.stage)}<div><small style="color:var(--muted)">${STAGE[r.stage] || ''}</small></div></div></div>
-        <p>${esc(r.description)}</p>${aiBox(r)}<div class="acts">${actions(r)}</div></div>`).join('') : '<div class="card empty">No repair requests</div>'}`;
+        <div>${badge(r.stage)}</div></div>
+        <p>${esc(r.description)}</p>${aiBox(r)}<div class="acts">${actions(r)}</div></div>`).join('') : '<div class="card empty"><b>No repair requests</b>Reported problems appear here.</div>'}`;
     view.querySelectorAll('[data-a]').forEach(btn => btn.onclick = async () => {
       const a = btn.dataset.a;
       if (a === 'confirm' && !(await confirmBox('Confirm problem?', 'Equipment goes to MAINTENANCE and all pending/confirmed bookings are canceled.', 'Confirm', true))) return;
