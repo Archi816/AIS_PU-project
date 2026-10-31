@@ -34,9 +34,10 @@ label{display:block;font-weight:600;margin:14px 0 5px;font-size:13.5px}
 .shell{min-height:100vh;display:flex;flex-direction:column}
 .top{position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:16px;padding:0 24px;height:60px;background:linear-gradient(90deg,var(--navy),var(--navy-2));color:#fff;border-bottom:3px solid var(--gold)}
 .brand{display:flex;align-items:center;gap:12px;color:#fff;text-decoration:none}
+.logo{width:40px;height:40px;display:block;flex:none;filter:drop-shadow(0 2px 4px rgba(0,0,0,.35))}
+.hero-logo{width:270px;max-width:75%;display:block;margin-bottom:30px}
 .brand b{font-family:var(--serif);font-size:20px;letter-spacing:.04em;display:block;line-height:1.1}
 .brand small{color:#B9C7DD;font-size:11.5px;display:block;letter-spacing:.02em}
-.mark{width:36px;height:36px;border-radius:9px;background:#fff;color:var(--navy);display:grid;place-items:center;font:700 20px var(--serif);box-shadow:inset 0 0 0 2px var(--gold)}
 .grow{flex:1}.rel{position:relative}
 .burger{display:none;background:none;border:0;color:#fff;font-size:24px;cursor:pointer;padding:4px 8px}
 .bell{background:rgba(255,255,255,.08);border:0;color:#fff;width:38px;height:38px;border-radius:50%;cursor:pointer;display:grid;place-items:center;position:relative}
@@ -127,8 +128,7 @@ th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;le
 /* auth: hero + form */
 .auth{min-height:100vh;display:grid;grid-template-columns:1.1fr 1fr}
 .hero{background:linear-gradient(155deg,var(--navy),var(--navy-2) 70%);color:#fff;padding:56px 60px;display:flex;flex-direction:column;justify-content:center;border-right:4px solid var(--gold)}
-.hero .mark{width:56px;height:56px;font-size:30px;margin-bottom:26px}
-.hero h1{font-size:38px;line-height:1.15;margin:0 0 14px}.hero p{color:#C9D5E8;font-size:16px;max-width:460px}
+.hero .hero h1{font-size:30px;line-height:1.2;margin:0 0 14px;font-weight:600;color:#DCE6F5}.hero p{color:#C9D5E8;font-size:16px;max-width:460px}
 .hero ul{list-style:none;padding:0;margin:26px 0 0}.hero li{padding:7px 0 7px 28px;position:relative;color:#E3EAF5}
 .hero li:before{content:"✓";position:absolute;left:0;color:var(--gold);font-weight:700}
 .formwrap{display:grid;place-items:center;padding:30px}.formwrap .card{width:100%;max-width:410px;padding:30px}

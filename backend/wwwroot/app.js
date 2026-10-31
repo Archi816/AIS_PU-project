@@ -51,7 +51,7 @@ const fieldErr = (f, k) => f?.[k] ? `<div class="err">${esc(f[k])}</div>` : '';
 function showAuth(mode, errors = {}, msg = '', vals = {}) {
   clearTimers();
   const reg = mode === 'register';
-  $app.innerHTML = `<div class="auth"><section class="hero"><div class="mark">L</div>
+  $app.innerHTML = `<div class="auth"><section class="hero"><img class="hero-logo" src="wordmark.svg?v=4" alt="LEMS">
       <h1>Laboratory Equipment<br>Management System</h1>
       <p>Reserve laboratory equipment, follow every decision and report faults - all in one place.</p>
       <ul><li>Book equipment in one-hour slots</li><li>Get notified about approvals and changes</li><li>Report problems with AI-assisted triage for technicians</li></ul></section>
@@ -94,7 +94,7 @@ function shell(page) {
   $app.innerHTML = `<div class="shell">
     <header class="top">
       <button class="burger" id="burger" aria-label="Open menu">☰</button>
-      <a class="brand" href="#/dashboard"><span class="mark">L</span><span><b>LEMS</b><small>Laboratory Equipment Management</small></span></a>
+      <a class="brand" href="#/dashboard"><img class="logo" src="logo.svg?v=4" alt=""><span><b>LEMS</b><small>Laboratory Equipment Management</small></span></a>
       <div class="grow"></div>
       <div class="rel"><button class="bell" id="bell" aria-label="Notifications">${ICON.bell}<span class="badge-n" id="nbadge" hidden>0</span></button><div class="drop notes" id="notes" hidden></div></div>
       <div class="rel"><button class="acct" id="acct" aria-label="Account menu"><span class="avatar">${esc(ini)}</span><span class="who"><b>${esc(user.name)} ${esc(user.surname)}</b><span class="role">${isAdmin() ? 'Administrator' : 'Student'}</span></span></button>

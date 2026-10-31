@@ -125,3 +125,8 @@ Navy brand header with a gold rule, serif headings, white cards, status colours.
 * Every equipment card shows a **vector illustration** chosen from the title/category (`backend/wwwroot/art.js`: 3D printer, Arduino, multimeter, laptop, workstation, robot, Raspberry Pi, oscilloscope, microscope, generic toolbox). Add a new picture by adding an entry to `ART` and a keyword rule in `equipmentArt`.
 * Administrators can upload a **real photo** per equipment (Edit/Add form -> Photo): PNG, JPEG or WebP; the browser shrinks it to max 900 px JPEG, the server accepts max 1.5 MB and checks the file content (SVG is refused on purpose). It is stored in the Core database (`EquipmentImages`, `varbinary`/`BLOB`), so it works with several servers and in the cloud. Removing the photo brings the illustration back.
 * **Schema change:** this adds the table `EquipmentImages`. There are no migrations yet - for a development database delete `lems-core.db` and `lems-ops.db` once.
+
+## Logo
+* `backend/wwwroot/logo.svg` - flask icon with the "L" in the liquid (header, browser tab/favicon).
+* `backend/wwwroot/wordmark.svg` - "LEMS" letters standing on one shared ruler line (login screen).
+* Alternatives are in `docs/logo-options/` (`molecule.svg`, `flask.svg`, `ruler-L.svg`). To switch, copy one over `backend/wwwroot/logo.svg` and raise the `?v=` number in `index.html` / `app.js`. Colours are the navy/gold values from `styles.css`.

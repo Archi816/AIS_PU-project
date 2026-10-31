@@ -143,3 +143,14 @@ test('illustration picker matches equipment types', async () => {
   assert.notEqual(pick('3D printer'), pick('Centrifuge'));
   assert.equal(pick('Centrifuge'), pick('Something unknown'), 'unknown equipment gets the generic picture');
 });
+
+test('brand logo: header icon and login wordmark', async () => {
+  const { d } = await boot('STUDENT', '#/dashboard');
+  assert.match(d.querySelector('.top .brand img.logo').getAttribute('src'), /^logo\.svg/);
+  const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
+  const w = dom.window; w.setInterval = () => 0;
+  w.fetch = async () => ({ ok: false, status: 401, json: async () => ({}) });
+  w.eval(art); w.eval(code);
+  await waitFor(() => w.document.querySelector('.hero'));
+  assert.match(w.document.querySelector('.hero img.hero-logo').getAttribute('src'), /^wordmark\.svg/);
+});
