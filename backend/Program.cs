@@ -116,3 +116,6 @@ static class Seed
         core.SaveChanges();
     }
 }
+
+// needed by WebApplicationFactory<Program> in tests/backend
+public partial class Program { }

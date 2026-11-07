@@ -1,32 +1,27 @@
+
+!.env.example
+# .NET build output
+# Downloaded full documents (rebuildable cache)
 # Local IDE state
-.vs/
-*.user
-*.suo
-
-# Python environments and generated files
-.venv/
-venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.ruff_cache/
-.coverage
-htmlcov/
-
+# Local catalog runtime files
 # Local configuration and credentials
+# Python environments and generated files
+*.py[cod]
+*.suo
+*.user
+.coverage
 .env
 .env.*
-!.env.example
-
-# .NET build output
+.pytest_cache/
+.ruff_cache/
+.venv/
+.vs/
 [Bb]in/
 [Oo]bj/
-
-# Local catalog runtime files
+__pycache__/
 ai-service/data/*.db
 ai-service/data/*.db-*
-
-ai-service/data/embedding-cache/
-
-# Downloaded full documents (rebuildable cache)
 ai-service/data/document-cache/
+ai-service/data/embedding-cache/
+htmlcov/
+venv/
