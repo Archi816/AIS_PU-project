@@ -1,5 +1,4 @@
-# C# backend + UI, run SEPARATELY from the AI service.
-# Databases are in the cloud (Azure SQL + AWS RDS Postgres) -> values come from backend/.env
+# C# backend + UI using the cloud databases configured in backend/.env.
 services:
   backend:
     build: .

@@ -1,6 +1,3 @@
-# Запускает backend и ai-service одной командой: docker compose up -d --build
-# Образы и Dockerfile остаются раздельными (backend/ и ai-service/).
-# Локальные базы-заглушки вынесены в docker-compose.dev-databases.yml
 include:
   - path: ./ai-service/docker-compose.yml
   - path: ./backend/docker-compose.yml

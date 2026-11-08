@@ -12,6 +12,7 @@
 .coverage
 .env
 .env.*
+!backend/.env.example
 .pytest_cache/
 .ruff_cache/
 .venv/
@@ -25,3 +26,5 @@ ai-service/data/document-cache/
 ai-service/data/embedding-cache/
 htmlcov/
 venv/
+*.crt
+.vscode/
