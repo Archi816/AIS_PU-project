@@ -1,0 +1,15 @@
+# C# backend + UI, run SEPARATELY from the AI service.
+# Databases are in the cloud (Azure SQL + AWS RDS Postgres) -> values come from backend/.env
+services:
+  backend:
+    build: .
+    image: lems-backend
+    container_name: lems-backend
+    ports: ["5000:8080"]
+    env_file: .env
+    environment:
+      Databases__Core__Provider: SqlServer
+      Databases__Ops__Provider: Postgres
+      AiService__BaseUrl: ${AI_SERVICE_URL:-http://host.docker.internal:8000}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    restart: unless-stopped
