@@ -1,0 +1,13 @@
+fastapi==0.142.2
+uvicorn==0.54.0
+python-dotenv==1.2.4
+openai==3.24.0
+fastembed==0.9.1
+psycopg[binary]==3.3.6
+# HTTP client for document downloads and provider integration.
+httpx==0.28.1
+pydantic==2.13.5
+numpy==2.5.4
+beautifulsoup4==4.15.0
+pypdf==6.21.3
+fonttools==4.68.0

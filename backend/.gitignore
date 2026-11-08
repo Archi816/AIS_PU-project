@@ -1,0 +1,8 @@
+bin/
+obj/
+*.db
+*.db-shm
+*.db-wal
+appsettings.Production.json
+appsettings.Local.json
+.env

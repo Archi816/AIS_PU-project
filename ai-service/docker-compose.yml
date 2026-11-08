@@ -1,0 +1,11 @@
+# Python AI service, run SEPARATELY from the backend. Secrets in ai-service/.env
+services:
+  ai-service:
+    build: .
+    image: lems-ai-service
+    container_name: lems-ai-service
+    env_file: .env
+    ports: ["8000:8000"]
+    volumes:
+      - ./certs:/certs:ro      # Supabase CA cert; in .env use sslrootcert=/certs/prod-ca-2021.crt
+    restart: unless-stopped
