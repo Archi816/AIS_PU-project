@@ -1,5 +1,5 @@
-<div align="center">
-  <img src="docs/assets/logo.svg" alt="LEMS logo">
+<div align="left">
+  <img src="docs/assets/logo.svg" alt="LEMS logo" width="150">
 </div>
 
 # Lab Equipment Management System (LEMS)
