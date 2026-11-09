@@ -1,0 +1,19 @@
+services:
+  backend:
+    build: ./backend
+    image: lems-backend-local
+    container_name: lems-backend-local
+    ports:
+      - "5000:8080"
+    env_file:
+      - ./backend/.env
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      Databases__Core__Provider: Sqlite
+      Databases__Core__ConnectionString: Data Source=/tmp/lems-core.db
+      Databases__Ops__Provider: Sqlite
+      Databases__Ops__ConnectionString: Data Source=/tmp/lems-ops.db
+      AiService__BaseUrl: http://host.docker.internal:8000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
