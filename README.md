@@ -1,4 +1,6 @@
-![logo](docs/assets/logo.svg)
+<div align="center">
+  <img src="docs/assets/logo.svg" alt="LEMS logo">
+</div>
 
 # Lab Equipment Management System (LEMS)
 
