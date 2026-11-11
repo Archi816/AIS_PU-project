@@ -3,8 +3,7 @@ services:
     build: ./backend
     image: lems-backend-local
     container_name: lems-backend-local
-    ports:
-      - "5000:8080"
+    expose: ["8080"]
     env_file:
       - ./backend/.env
     environment:
@@ -14,6 +13,18 @@ services:
       Databases__Ops__Provider: Sqlite
       Databases__Ops__ConnectionString: Data Source=/tmp/lems-ops.db
       AiService__BaseUrl: http://host.docker.internal:8000
+      Security__BehindProxy: "true"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+  frontend:
+    build: ./frontend
+    image: lems-frontend-local
+    container_name: lems-frontend-local
+    ports:
+      - "5000:8080"
+    environment:
+      BACKEND_URL: http://backend:8080
+    depends_on:
+      - backend
     restart: unless-stopped

@@ -1,10 +1,11 @@
 using System.Text.Json.Serialization;
 using Lems;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ---- two databases: CORE (Azure SQL: users, sessions, equipment) and OPS (PostgreSQL: bookings, repairs, notifications, activity) ----
+// ---- API only (UI: ../frontend). Two databases: CORE (Azure SQL: users, sessions, equipment) and OPS (PostgreSQL: bookings, repairs, notifications, activity) ----
 // Provider per database: "SqlServer" | "Postgres" | "Sqlite" (Sqlite = local development without any cloud account)
 static void UseProvider(DbContextOptionsBuilder o, IConfiguration cfg, string name)
 {
@@ -31,6 +32,19 @@ builder.Services.AddHttpClient("ai", c =>
     c.Timeout = TimeSpan.FromSeconds(90);   // provider timeout is 60 s plus search (API_CONTRACT.md)
 });
 builder.Services.AddHostedService<LifecycleWorker>();
+
+// The web UI is a separate container (frontend/, nginx) that proxies /api to this service. Behind that proxy the
+// real client address and protocol arrive in X-Forwarded-* headers (login throttling and the Secure cookie need them).
+// Enabled only with Security:BehindProxy=true: the headers are trusted blindly, so this service must NOT be published
+// directly to the internet in that mode (docker-compose publishes only the frontend).
+var behindProxy = builder.Configuration.GetValue<bool>("Security:BehindProxy");
+if (behindProxy)
+    builder.Services.Configure<ForwardedHeadersOptions>(o =>
+    {
+        o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+        o.KnownNetworks.Clear();
+        o.KnownProxies.Clear();
+    });
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 
 var app = builder.Build();
@@ -52,6 +66,8 @@ using (var scope = app.Services.CreateScope())
     Seed.Run(core, ops, app.Environment.IsDevelopment(), app.Configuration, app.Logger);
 }
 
+if (behindProxy) app.UseForwardedHeaders();
+
 var requireHttps = app.Configuration.GetValue<bool>("Security:RequireHttps");
 if (requireHttps) { app.UseHsts(); app.UseHttpsRedirection(); }
 
@@ -66,13 +82,7 @@ app.Use(async (ctx, next) =>
     await next();
 });
 
-app.UseDefaultFiles();
-// The UI files change with every release: browsers must re-check them (ETag -> 304 when unchanged) instead of
-// reusing a stale copy for hours, which showed new HTML with an old stylesheet.
-app.UseStaticFiles(new StaticFileOptions
-{
-    OnPrepareResponse = ctx => ctx.Context.Response.Headers["Cache-Control"] = "no-cache"
-});
+// No static files here any more: the UI lives in frontend/ and is served by its own container.
 app.UseMiddleware<SessionMiddleware>();
 Api.Map(app);
 app.Run();

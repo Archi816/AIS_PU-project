@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { JSDOM } from 'jsdom';
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '../../backend/wwwroot');
+const root = join(dirname(fileURLToPath(import.meta.url)), '../../frontend');
 const html = readFileSync(join(root, 'index.html'), 'utf8').replace(/<script src="app\.js[^"]*"><\/script>/, '');
 const code = readFileSync(join(root, 'app.js'), 'utf8');
 const art = readFileSync(join(root, 'art.js'), 'utf8');

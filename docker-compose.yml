@@ -1,3 +1,4 @@
 include:
   - path: ./ai-service/docker-compose.yml
   - path: ./backend/docker-compose.yml
+  - path: ./frontend/docker-compose.yml

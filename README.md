@@ -135,6 +135,18 @@ The system allows students to view laboratory equipment, submit booking requests
 
 This diagram illustrates the LEMS business process ([PNG](docs/assets/bpmn.png), [SVG](docs/assets/bpmn.svg)).
 
+## Project structure
+
+| Folder | What it is | Container |
+|---|---|---|
+| `frontend/` | Web UI (static HTML/CSS/JS) served by nginx; proxies `/api/*` to the backend | `lems-frontend` (the only service published to the browser, port 5000) |
+| `backend/` | ASP.NET Core 8 REST API (auth, equipment, bookings, repairs) | `lems-backend` (internal port 8080) |
+| `ai-service/` | Python FastAPI service for AI failure reports | `lems-ai-service` (port 8000) |
+| `tests/` | `backend/` (xUnit API tests), `frontend/` (jsdom smoke tests) | - |
+
+The browser talks only to the frontend container. It forwards `/api/*` to the backend on the same origin, so session
+cookies and the backend's CSRF check work without CORS.
+
 ## Usage
 
 ```bash
@@ -142,20 +154,30 @@ This diagram illustrates the LEMS business process ([PNG](docs/assets/bpmn.png),
 git clone https://github.com/Archi816/AIS_PU-project.git
 cd AIS_PU-project
 
-# Build and start the containers
-docker-compose up --build -d
+# Build and start all containers (frontend, backend, ai-service)
+docker compose up --build -d
 
 # Stop the containers
-docker-compose down
+docker compose down
 ```
 
-> Make sure to create and configure the `.env` file before starting the containers.
+> Make sure to create and configure `backend/.env` and `ai-service/.env` (see the `.env.example` files) before starting the containers.
+
+Local run without cloud accounts (SQLite databases, demo data; the AI service is started separately):
+
+```bash
+docker compose -f docker-compose.local.yml up --build
+```
 
 Open [http://localhost:5000](http://localhost:5000) and sign in with a demo
-account:
+account (demo accounts exist only in the Development environment, i.e. the local compose file):
 
 - Admin: `admin@lems.local` / `Admin123!`
 - Student: `jan.novak@student.tuke.sk` / `Student123!`
+
+Backend settings for the split: `Security__BehindProxy=true` (set in the compose files) makes the API trust
+`X-Forwarded-For` / `X-Forwarded-Proto` from the frontend container. Do not publish the backend port to the internet in this mode.
+Frontend setting: `BACKEND_URL` (default `http://backend:8080`) is the address nginx proxies `/api/*` to.
 
 ## Architecture
 

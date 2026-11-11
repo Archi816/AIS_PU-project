@@ -1,0 +1,43 @@
+# Rendered by the nginx image: only ${BACKEND_URL} is substituted, nginx's own $variables stay untouched.
+
+# Keep the protocol seen by the outermost proxy (e.g. a TLS terminator in front of this container).
+map $http_x_forwarded_proto $lems_proto {
+    default $http_x_forwarded_proto;
+    ""      $scheme;
+}
+
+server {
+    listen 8080;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+    client_max_body_size 2m;   # equipment photos are limited to 1.5 MB by the backend
+
+    # Same headers the backend used to set for the UI (they now belong to whoever serves the HTML).
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "same-origin" always;
+    add_header Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'" always;
+
+    # API: same origin for the browser, so cookies and the backend's CSRF Origin check keep working without CORS.
+    location /api/ {
+        proxy_pass ${BACKEND_URL};
+        proxy_http_version 1.1;
+        # The backend compares the Origin header with the Host header: pass the ORIGINAL host (with port) through.
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $lems_proto;
+        proxy_read_timeout 120s;
+        # nginx adds the security headers above itself; avoid duplicates from the backend (Cache-Control stays).
+        proxy_hide_header X-Content-Type-Options;
+        proxy_hide_header X-Frame-Options;
+        proxy_hide_header Referrer-Policy;
+        proxy_hide_header Content-Security-Policy;
+    }
+
+    # UI files change with every release: always revalidate (ETag -> 304). "expires -1" sends Cache-Control: no-cache.
+    location / {
+        expires -1;
+        try_files $uri $uri/ /index.html;
+    }
+}

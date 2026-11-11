@@ -1,14 +1,16 @@
-# C# backend + UI using the cloud databases configured in backend/.env.
+# C# backend (API only) using the cloud databases configured in backend/.env.
+# It is NOT published to the host: the browser talks to the frontend container, which proxies /api here.
 services:
   backend:
     build: .
     image: lems-backend
     container_name: lems-backend
-    ports: ["5000:8080"]
+    expose: ["8080"]
     env_file: .env
     environment:
       Databases__Core__Provider: SqlServer
       Databases__Ops__Provider: Postgres
       AiService__BaseUrl: ${AI_SERVICE_URL:-http://host.docker.internal:8000}
+      Security__BehindProxy: "true"   # trust X-Forwarded-* from the frontend (nginx) container
     extra_hosts: ["host.docker.internal:host-gateway"]
     restart: unless-stopped

@@ -1,0 +1,11 @@
+# Web UI (nginx). The only service published to the browser; /api/* is proxied to the backend service.
+services:
+  frontend:
+    build: .
+    image: lems-frontend
+    container_name: lems-frontend
+    ports: ["5000:8080"]
+    environment:
+      BACKEND_URL: ${BACKEND_URL:-http://backend:8080}
+    depends_on: [backend]
+    restart: unless-stopped
