@@ -1,9 +1,9 @@
 /* Flat vector illustrations for equipment cards (shown when an administrator has not uploaded a photo).
    equipmentArt(e) picks one from the title / category / inventory number. Pure strings, no external files. */
 const ART = (() => {
-  const N = '#0B2545', N2 = '#13315C', B = '#2563EB', L = '#BFD3FF', G = '#B8962E', W = '#fff', S = '#CBD5E1', S2 = '#94A3B8', D = '#1E293B';
+  const N = '#27272A', N2 = '#3F3F46', B = '#4F46E5', L = '#C7D2FE', G = '#D4A017', W = '#fff', S = '#D4D4D8', S2 = '#A1A1AA', D = '#27272A';
   const wrap = body => `<svg viewBox="0 0 200 120" role="img" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">${body}</svg>`;
-  const shadow = (cx, cy, rx) => `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="5" fill="#0B2545" opacity=".10"/>`;
+  const shadow = (cx, cy, rx) => `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="5" fill="#27272A" opacity=".10"/>`;
   return {
     printer3d: wrap(`${shadow(100, 110, 60)}
       <rect x="50" y="98" width="100" height="9" rx="3" fill="${N2}"/>
@@ -29,20 +29,20 @@ const ART = (() => {
       <path d="M70 100C48 100 30 86 26 66" fill="none" stroke="#DC2626" stroke-width="3" stroke-linecap="round"/>
       <path d="M130 100c22 0 40-14 44-34" fill="none" stroke="${D}" stroke-width="3" stroke-linecap="round"/>
       <rect x="26" y="60" width="5" height="14" rx="2" fill="#DC2626" transform="rotate(-12 28 66)"/><rect x="170" y="58" width="5" height="14" rx="2" fill="${D}" transform="rotate(12 172 64)"/>
-      <rect x="66" y="6" width="68" height="104" rx="11" fill="${G}"/><rect x="70" y="10" width="60" height="96" rx="8" fill="#E7C65A" opacity=".55"/>
+      <rect x="66" y="6" width="68" height="104" rx="11" fill="${G}"/><rect x="70" y="10" width="60" height="96" rx="8" fill="#F2CF66" opacity=".55"/>
       <rect x="74" y="15" width="52" height="25" rx="3" fill="#B7D7B0" stroke="${D}" stroke-width="2"/>
       <text x="121" y="36" font-family="monospace" font-size="15" font-weight="700" text-anchor="end" fill="${D}">12.46</text><text x="78" y="23" font-family="monospace" font-size="5.5" fill="${D}">DC V</text>
-      <circle cx="100" cy="68" r="19" fill="${D}"/><circle cx="100" cy="68" r="13" fill="#334155"/><path d="M100 68L108 56" stroke="${W}" stroke-width="3" stroke-linecap="round"/>
+      <circle cx="100" cy="68" r="19" fill="${D}"/><circle cx="100" cy="68" r="13" fill="#3F3F46"/><path d="M100 68L108 56" stroke="${W}" stroke-width="3" stroke-linecap="round"/>
       ${[0, 1, 2, 3, 4, 5, 6, 7].map(i => { const a = i * Math.PI / 4; return `<circle cx="${(100 + Math.cos(a) * 24).toFixed(1)}" cy="${(68 + Math.sin(a) * 24).toFixed(1)}" r="1.4" fill="${D}"/>`; }).join('')}
       <circle cx="84" cy="100" r="4.5" fill="${D}"/><circle cx="100" cy="100" r="4.5" fill="${D}"/><circle cx="116" cy="100" r="4.5" fill="#DC2626"/>`),
     laptop: wrap(`${shadow(100, 108, 78)}
       <rect x="44" y="14" width="112" height="74" rx="6" fill="${N}"/><rect x="50" y="20" width="100" height="62" rx="2" fill="${B}"/>
-      <rect x="50" y="20" width="100" height="62" rx="2" fill="url(#lg)"/><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#60A5FA"/><stop offset="1" stop-color="#1D4ED8"/></linearGradient></defs>
+      <rect x="50" y="20" width="100" height="62" rx="2" fill="url(#lg)"/><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#818CF8"/><stop offset="1" stop-color="#4338CA"/></linearGradient></defs>
       <rect x="58" y="28" width="46" height="5" rx="2" fill="${W}" opacity=".85"/><rect x="58" y="38" width="64" height="3" rx="1.5" fill="${W}" opacity=".5"/><rect x="58" y="45" width="54" height="3" rx="1.5" fill="${W}" opacity=".5"/>
       <rect x="58" y="56" width="28" height="18" rx="2" fill="${W}" opacity=".25"/><rect x="92" y="56" width="50" height="18" rx="2" fill="${W}" opacity=".15"/>
       <path d="M30 94h140l-8 11H38z" fill="${S}"/><rect x="30" y="90" width="140" height="6" rx="3" fill="${S2}"/><rect x="88" y="97" width="24" height="3" rx="1.5" fill="${S2}"/>`),
     workstation: wrap(`${shadow(100, 110, 74)}
-      <rect x="28" y="12" width="104" height="70" rx="5" fill="${N}"/><rect x="34" y="18" width="92" height="56" rx="2" fill="#E8F0FF"/>
+      <rect x="28" y="12" width="104" height="70" rx="5" fill="${N}"/><rect x="34" y="18" width="92" height="56" rx="2" fill="#EEF2FF"/>
       <rect x="34" y="18" width="92" height="12" fill="${B}"/><circle cx="40" cy="24" r="2" fill="${W}"/><circle cx="47" cy="24" r="2" fill="${W}" opacity=".7"/>
       <rect x="40" y="38" width="38" height="4" rx="2" fill="${S2}"/><rect x="40" y="46" width="62" height="4" rx="2" fill="${S}"/><rect x="40" y="54" width="50" height="4" rx="2" fill="${S}"/><rect x="40" y="62" width="30" height="4" rx="2" fill="${S}"/>
       <rect x="74" y="82" width="12" height="14" fill="${S2}"/><rect x="56" y="96" width="48" height="6" rx="3" fill="${S}"/>

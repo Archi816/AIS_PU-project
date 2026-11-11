@@ -47,23 +47,36 @@ function confirmBox(title, text, okLabel, danger) {
 }
 const fieldErr = (f, k) => f?.[k] ? `<div class="err">${esc(f[k])}</div>` : '';
 
+
+
+/* ---------- small date helpers + view state ---------- */
+const hh = h => pad(h);
+const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n); return ymd(d); };
+const fmtDay = iso => new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+const fmtShort = d => new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) + ', ' + fmtT(d);
+const BOOK_AHEAD_DAYS = 60;
+let sched = { date: ymd(new Date()), all: false }, dashBk = 'all', invState = { q: '', category: '', status: '', page: 1 };
+
 /* ---------- auth screens ---------- */
 function showAuth(mode, errors = {}, msg = '', vals = {}) {
   clearTimers();
   const reg = mode === 'register';
-  $app.innerHTML = `<div class="auth"><section class="hero"><img class="hero-logo" src="wordmark.svg?v=4" alt="LEMS">
+  const prow = (name, cells) => `<div class="pr"><span>${name}</span>${[...cells].map(c => `<i class="${c === 'x' ? 't' : c === 'm' ? 'm' : ''}"></i>`).join('')}</div>`;
+  $app.innerHTML = `<div class="auth"><section class="hero"><img class="hero-logo" src="wordmark.svg?v=5" alt="LEMS">
       <h1>Laboratory Equipment<br>Management System</h1>
       <p>Reserve laboratory equipment, follow every decision and report faults - all in one place.</p>
-      <ul><li>Book equipment in one-hour slots</li><li>Get notified about approvals and changes</li><li>Report problems with AI-assisted triage for technicians</li></ul></section>
+      <ul><li>Book equipment in one-hour slots</li><li>Get notified about approvals and changes</li><li>Report problems with AI-assisted triage for technicians</li></ul>
+      <div class="preview" aria-hidden="true">${prow('Oscilloscope', '..xx....')}${prow('3D printer', 'xx..x...')}${prow('Centrifuge', 'mmmmmmmm')}</div></section>
     <section class="formwrap"><div class="card">
-    <h2>${reg ? 'Create student account' : 'Log in'}</h2>
-    <label>Email</label><input id="email" type="email" value="${esc(vals.email)}" placeholder="${reg ? 'name.surname@student.tuke.sk' : 'you@example.com'}">${fieldErr(errors, 'email')}
-    <label>Password</label><input id="pw" type="password">${fieldErr(errors, 'password')}
-    ${reg ? `<label>Confirm password</label><input id="pw2" type="password">${fieldErr(errors, 'confirmPassword')}` : ''}
+    <h2>${reg ? 'Create student account' : 'Welcome back'}</h2>
+    <div class="lead">${reg ? 'Use your university e-mail address.' : 'Log in to book and manage laboratory equipment.'}</div>
+    <label for="email">Email</label><input id="email" type="email" autocomplete="username" value="${esc(vals.email)}" placeholder="${reg ? 'name.surname@student.tuke.sk' : 'you@example.com'}">${fieldErr(errors, 'email')}
+    <label for="pw">Password</label><input id="pw" type="password" autocomplete="${reg ? 'new-password' : 'current-password'}">${fieldErr(errors, 'password')}
+    ${reg ? `<label for="pw2">Confirm password</label><input id="pw2" type="password" autocomplete="new-password">${fieldErr(errors, 'confirmPassword')}` : ''}
     ${msg ? `<div class="alert">${esc(msg)}</div>` : ''}
-    <button class="btn primary" id="go" style="width:100%;margin-top:18px">${reg ? 'Create Account' : 'Log In'}</button>
+    <button class="btn primary" id="go">${reg ? 'Create Account' : 'Log In'}</button>
     <div class="alt">${reg ? 'Have an account? <a id="sw">Log in</a>' : 'New student? <a id="sw">Create an account</a>'}</div>
-  </div></div></section></div>`;
+  </div></section></div>`;
   document.getElementById('email')?.focus();
   const val = id => document.getElementById(id)?.value ?? '';
   const submit = async () => {
@@ -81,41 +94,68 @@ function showAuth(mode, errors = {}, msg = '', vals = {}) {
 /* ---------- shell ---------- */
 const svg = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
 const ICON = {
-  dashboard: svg('<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/>'),
-  equipment: svg('<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 012-2h4a2 2 0 012 2v2"/><path d="M3 13h18"/>'),
+  dashboard: svg('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'),
+  equipment: svg('<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>'),
   bookings: svg('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>'),
-  repairs: svg('<rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4h6v3H9zM9 12h6M9 16h4"/>'),
-  bell: svg('<path d="M6 9a6 6 0 0112 0c0 6 2 7 2 7H4s2-1 2-7"/><path d="M10 20a2 2 0 004 0"/>')
+  report: svg('<path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/><path d="M12 9v4M12 17h.01"/>'),
+  repairs: svg('<path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/>'),
+  inventory: svg('<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 002 2h12a2 2 0 002-2V8M10 12h4"/>'),
+  students: svg('<path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/>'),
+  bell: svg('<path d="M6 9a6 6 0 0112 0c0 6 2 7 2 7H4s2-1 2-7"/><path d="M10 20a2 2 0 004 0"/>'),
+  search: svg('<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>'),
+  plus: svg('<path d="M12 5v14M5 12h14"/>'),
+  left: svg('<path d="M15 18l-6-6 6-6"/>'),
+  right: svg('<path d="M9 18l6-6-6-6"/>'),
+  menu: svg('<path d="M4 6h16M4 12h16M4 18h16"/>'),
+  check: svg('<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>'),
+  clock: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+  list: svg('<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>'),
+  pulse: svg('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>')
 };
-const NAV = () => [['dashboard', 'Dashboard'], ['equipment', 'Equipment'], ['bookings', 'Bookings'], ['repairs', 'Repair Requests']];
+const NAV = () => isAdmin()
+  ? [['Main', [['dashboard', 'Dashboard'], ['equipment', 'Equipment'], ['bookings', 'Bookings']]], ['Admin', [['inventory', 'Inventory'], ['repairs', 'Repair Requests'], ['students', 'Students']]]]
+  : [['Main', [['dashboard', 'Dashboard'], ['equipment', 'Equipment'], ['bookings', 'My Bookings'], ['repairs', 'Report Issue']]]];
+const NAV_ICON = { repairs: () => isAdmin() ? ICON.repairs : ICON.report };
 
 function shell(page) {
   const ini = (user.name[0] + user.surname[0]).toUpperCase();
+  const role = isAdmin() ? 'Administrator' : 'Student';
+  const link = ([k, t]) => `<a href="#/${k}" class="${k === page ? 'active' : ''}">${(NAV_ICON[k] ? NAV_ICON[k]() : ICON[k])}<span>${t}</span></a>`;
   $app.innerHTML = `<div class="shell">
-    <header class="top">
-      <button class="burger" id="burger" aria-label="Open menu">☰</button>
-      <a class="brand" href="#/dashboard"><img class="logo" src="logo.svg?v=4" alt=""><span><b>LEMS</b><small>Laboratory Equipment Management</small></span></a>
-      <div class="grow"></div>
-      <div class="rel"><button class="bell" id="bell" aria-label="Notifications">${ICON.bell}<span class="badge-n" id="nbadge" hidden>0</span></button><div class="drop notes" id="notes" hidden></div></div>
-      <div class="rel"><button class="acct" id="acct" aria-label="Account menu"><span class="avatar">${esc(ini)}</span><span class="who"><b>${esc(user.name)} ${esc(user.surname)}</b><span class="role">${isAdmin() ? 'Administrator' : 'Student'}</span></span></button>
-        <div class="drop" id="menu" hidden><div class="it"><small>Signed in as</small><br><b>${esc(user.email)}</b><br><small>${isAdmin() ? 'Administrator' : 'Student'}</small></div>
+    <aside class="side" id="side">
+      <a class="brand" href="#/dashboard"><img class="logo" src="logo.svg?v=5" alt=""><b>LEMS<i>.</i></b></a>
+      <nav class="nav">${NAV().map(([h, items]) => `<div class="nav-h">${h}</div>${items.map(link).join('')}`).join('')}</nav>
+      <div class="side-user"><button class="acct" id="acct" aria-label="Account menu"><span class="avatar">${esc(ini)}</span><span class="who"><b>${esc(user.name)} ${esc(user.surname)}</b><span class="role">${role}</span></span></button>
+        <div class="drop up" id="menu" hidden><div class="it"><small>Signed in as</small><br><b>${esc(user.email)}</b><br><small>${role}</small></div>
         <div class="it"><button class="btn" id="logout" style="width:100%">Log out</button></div></div></div>
-    </header>
-    <div class="body">
-      <aside class="side" id="side"><nav class="nav">${NAV().map(([k, t]) => `<a href="#/${k}" class="${k === page ? 'active' : ''}">${ICON[k]}<span>${t}</span></a>`).join('')}</nav>
-        <div class="side-foot">LEMS prototype<br>Unofficial draft</div></aside>
+    </aside>
+    <div class="main">
+      <header class="top">
+        <button class="burger" id="burger" aria-label="Open menu">${ICON.menu}</button>
+        <div class="search">${ICON.search}<input id="gs" type="search" placeholder="Search equipment…" aria-label="Search equipment"></div>
+        <div class="grow"></div>
+        <div class="rel"><button class="btn icon bell" id="bell" aria-label="Notifications">${ICON.bell}<span class="badge-n" id="nbadge" hidden>0</span></button><div class="drop notes" id="notes" hidden></div></div>
+        <button class="btn primary" id="top-act">${ICON.plus}<span class="lbl">${isAdmin() ? 'Add Equipment' : 'New Booking'}</span></button>
+      </header>
       <main class="content" id="view" tabindex="-1"></main>
     </div></div>`;
   const notes = document.getElementById('notes'), menu = document.getElementById('menu'), side = document.getElementById('side');
   document.getElementById('burger').onclick = e => { e.stopPropagation(); side.classList.toggle('open'); };
-  side.onclick = () => side.classList.remove('open');
+  side.onclick = e => { if (e.target.closest('a')) side.classList.remove('open'); };
   document.getElementById('bell').onclick = async e => { e.stopPropagation(); menu.hidden = true; notes.hidden = !notes.hidden; if (!notes.hidden) { await loadNotes(true); } };
   document.getElementById('acct').onclick = e => { e.stopPropagation(); notes.hidden = true; menu.hidden = !menu.hidden; };
   document.onclick = () => { notes.hidden = true; menu.hidden = true; side.classList.remove('open'); };
-  notes.onclick = e => e.stopPropagation();
+  notes.onclick = e => e.stopPropagation(); menu.onclick = e => e.stopPropagation();
   document.getElementById('logout').onclick = async () => { await api('/auth/logout', 'POST'); user = null; showAuth('login'); };
+  document.getElementById('top-act').onclick = () => isAdmin() ? equipmentForm(null, route) : newBookingModal(route);
+  document.getElementById('gs').addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    eqState.q = e.target.value.trim(); eqState.page = 1; eqState.status = '';
+    if (location.hash === '#/equipment') route(); else location.hash = '#/equipment';
+  });
   loadNotes(false); timers.push(setInterval(() => loadNotes(false), 15000));
 }
+
 
 async function loadNotes(markRead) {
   try {
@@ -129,57 +169,126 @@ async function loadNotes(markRead) {
   } catch { }
 }
 
+
+
 /* ---------- router ---------- */
+const ADMIN_ONLY = ['inventory', 'students'];
 async function route() {
   if (!user) { try { user = await api('/auth/me'); } catch { if (!$app.querySelector('.auth')) showAuth('login'); return; } }
-  const page = (location.hash.replace('#/', '') || 'dashboard').split('?')[0];
-  const pages = { dashboard, equipment, bookings, repairs };
-  clearTimers(); shell(pages[page] ? page : 'dashboard');
+  const pages = { dashboard, equipment, bookings, repairs, inventory, students };
+  let page = (location.hash.replace('#/', '') || 'dashboard').split('?')[0];
+  if (!pages[page] || (ADMIN_ONLY.includes(page) && !isAdmin())) page = 'dashboard';
+  clearTimers(); shell(page);
   const view = document.getElementById('view');
   view.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
-  await (pages[page] || dashboard)(view);
+  await pages[page](view);
 }
 window.addEventListener('hashchange', route);
+
+const loadFailed = view => { if (view.querySelector('.skeleton')) view.innerHTML = '<div class="card empty"><b>Could not load data</b>Check your connection and try again.</div>'; };
 
 /* ---------- dashboard ---------- */
 async function dashboard(view) {
   const draw = async () => {
-    let d, mine = [];
-    try { d = await api('/dashboard'); if (!isAdmin()) mine = await api('/bookings'); } catch { return; }
-    const stat = (n, l, cls, href) => `<${href ? `a href="${href}"` : 'div'} class="card stat ${cls || ''}"><div class="n">${n}</div><div class="l">${l}</div></${href ? 'a' : 'div'}>`;
+    let d, sc, bk = [], rp = [];
+    try {
+      [d, sc, bk] = await Promise.all([api('/dashboard'), api('/schedule?date=' + sched.date), api('/bookings')]);
+      if (isAdmin()) rp = await api('/repairs');
+    } catch (e) { if (!e.handled) loadFailed(view); return; }
+
+    const rows = sc.equipment, hours = rows[0]?.slots.map(s => s.hour) ?? [];
+    const eq = d.equipment, pct = eq.total ? Math.round(eq.available * 100 / eq.total) : 0;
+    const bookedSlots = rows.reduce((n, r) => n + r.slots.filter(s => s.state === 'taken' || s.state === 'mine').length, 0);
+    const today = ymd(new Date()), last = addDays(today, BOOK_AHEAD_DAYS);
+    const stat = (title, n, sub, cls, ico) => `<div class="card stat ${cls}"><div class="top-row"><span class="l">${title}</span><span class="chip">${ico}</span></div><div class="n">${n}</div><div class="d ${cls}">${sub}</div></div>`;
+
+    /* schedule: first 5 pieces of equipment, the rest behind a button */
+    const shown = sched.all ? rows : rows.slice(0, 5);
+    const cell = (r, s) => {
+      const t = `${fmtT(s.start)}-${fmtT(s.end)}`;
+      if (s.state === 'free') return !isAdmin()
+        ? `<button type="button" class="cell free go" data-eq="${r.id}" data-start="${esc(s.start)}" title="${t} free - click to book">FREE</button>`
+        : `<span class="cell free" title="${t} free">FREE</span>`;
+      if (s.state === 'taken') return `<span class="cell taken" title="${t} booked">BOOKED</span>`;
+      if (s.state === 'mine') return `<span class="cell mine" title="${t} your booking">YOURS</span>`;
+      if (s.state === 'maintenance') return `<span class="cell maint" title="Under maintenance">-</span>`;
+      return `<span class="cell past" title="${t} already started">-</span>`;
+    };
+    const schedule = rows.length ? `<div class="sched-scroll"><div class="sched">
+        <div class="row head" style="--cols:${hours.length}"><span>Equipment</span>${hours.map(h => `<span>${hh(h)}</span>`).join('')}</div>
+        ${shown.map(r => `<div class="row ${r.status === 'MAINTENANCE' ? 'maint' : ''}" style="--cols:${hours.length}">
+          <div class="eqcell"><span class="ic">${ICON.equipment}</span><div style="min-width:0"><b>${esc(r.title)}${r.status === 'MAINTENANCE' ? '<span class="tagm">Maintenance</span>' : ''}</b><small>${esc(r.inventoryNumber)} · ${esc(r.location)}</small></div></div>
+          ${r.slots.map(s => cell(r, s)).join('')}</div>`).join('')}
+      </div></div>
+      <div class="sched-foot"><span>Showing ${shown.length} of ${rows.length} equipment</span>${rows.length > 5 ? `<button class="btn sm" id="sched-all">${sched.all ? 'Show first 5' : `Show all ${rows.length}`}</button>` : ''}</div>`
+      : '<div class="empty"><b>No equipment yet</b>Equipment added by an administrator appears here.</div>';
+
+    /* tables */
+    const tbl = (cols, body, empty) => body ? `<div class="tbl"><table><thead><tr>${cols.map(c => `<th>${c}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div>` : `<div class="empty"><b>${empty[0]}</b>${empty[1]}</div>`;
+    const eqTd = (t, inv, extra) => `<td><span class="nm">${esc(t)}</span><small>${esc(inv)}${extra ? ' · ' + esc(extra) : ''}</small></td>`;
     const now = Date.now();
-    const upcoming = mine.filter(b => ['PENDING', 'CONFIRMED', 'IN_PROGRESS'].includes(b.status) && new Date(b.end) > now).sort((a, b) => new Date(a.start) - new Date(b.start)).slice(0, 4);
-    const todo = (n, text, href) => `<a class="todo" href="${href}"><span>${text}</span><span class="num ${n ? '' : 'zero'}">${n}</span></a>`;
-    const side = isAdmin()
-      ? `<div class="card"><h2>Needs your attention</h2>${todo(d.admin.pendingBookings, 'Booking requests waiting for a decision', '#/bookings')}${todo(d.admin.repairsOpen, 'Open repair requests', '#/repairs')}${todo(d.equipment.maintenance, 'Equipment under maintenance', '#/equipment')}</div>`
-      : `<div class="card"><h2>Your upcoming bookings</h2>${upcoming.length ? upcoming.map(b => `<a class="todo" href="#/bookings"><span><b>${esc(b.equipmentTitle)}</b><br><small>${fmt(b.start)}</small></span>${badge(b.status)}</a>`).join('') : '<div class="empty" style="padding:22px 0"><b>Nothing booked</b>Reserve equipment on the Equipment page.</div>'}</div>`;
-    view.innerHTML = `<h1>Dashboard</h1><p class="sub">Overview of laboratory equipment and recent activity.</p>
-      <div class="grid g4">${stat(d.equipment.available, 'Available equipment', 'ok', '#/equipment')}${stat(d.equipment.reserved, 'Reserved right now', 'warn', '#/equipment')}${stat(d.equipment.maintenance, 'Under maintenance', 'bad', '#/equipment')}${stat(d.equipment.total, 'Total equipment', '', '#/equipment')}</div>
-      ${d.admin ? `<div class="grid g4" style="margin-top:18px">${stat(d.admin.repairsOpen, 'Open repair requests', 'warn', '#/repairs')}${stat(d.admin.repairsClosed, 'Closed repair requests', 'ok', '#/repairs')}${stat(d.admin.students, 'Students', 'gold')}${stat(d.admin.admins, 'Administrators', 'gold')}</div>` : ''}
-      <div class="grid g2" style="margin-top:22px">
-        <div class="card feed"><h2>Activity feed</h2>${d.feed.length ? d.feed.map(e => `<div class="ev">${esc(e.message)}<small>${fmt(e.createdAt)}</small></div>`).join('') : '<div class="empty"><b>No activity yet</b>Changes to equipment and reservations appear here.</div>'}</div>
-        ${side}</div>`;
+    let bookingsCard;
+    if (isAdmin()) {
+      const active = b => b.status === 'CONFIRMED' || b.status === 'IN_PROGRESS';
+      const list = bk.filter(b => dashBk === 'all' || (dashBk === 'pending' ? b.status === 'PENDING' : active(b)))
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 6);
+      bookingsCard = `<div class="card sect"><div class="card-h">${ICON.list}<div class="ttl"><h2>Recent Bookings</h2><small>Latest equipment reservations across the lab.</small></div>
+        <div class="right"><div class="pills">${[['all', 'All'], ['active', 'Active'], ['pending', 'Pending']].map(([k, t]) => `<button class="pill ${dashBk === k ? 'active' : ''}" data-bk="${k}">${t}</button>`).join('')}</div><a class="btn sm" href="#/bookings">View all</a></div></div>
+        ${tbl(['Equipment', 'Student', 'Date', 'Status'], list.map(b => `<tr>${eqTd(b.equipmentTitle, b.inventoryNumber)}<td>${esc(b.studentName)}</td><td>${fmtShort(b.start)}</td><td>${badge(b.status)}</td></tr>`).join(''), ['No bookings', 'Nothing matches this filter.'])}</div>`;
+    } else {
+      const up = bk.filter(b => ['PENDING', 'CONFIRMED', 'IN_PROGRESS'].includes(b.status) && new Date(b.end) > now).sort((a, b) => new Date(a.start) - new Date(b.start)).slice(0, 5);
+      bookingsCard = `<div class="card sect"><div class="card-h">${ICON.list}<div class="ttl"><h2>My upcoming bookings</h2><small>Your next reservations and their status.</small></div><div class="right"><a class="btn sm" href="#/bookings">View all</a></div></div>
+        ${tbl(['Equipment', 'Date', 'Status'], up.map(b => `<tr>${eqTd(b.equipmentTitle, b.inventoryNumber, b.location)}<td>${fmtShort(b.start)}</td><td>${badge(b.status)}</td></tr>`).join(''), ['Nothing booked', 'Click a free slot in the schedule above to reserve equipment.'])}</div>`;
+    }
+    const repairsCard = isAdmin() ? `<div class="card sect"><div class="card-h">${ICON.repairs}<div class="ttl"><h2>Recent Repair Requests</h2><small>Problems reported by students.</small></div><div class="right"><a class="btn sm" href="#/repairs">View all</a></div></div>
+        ${tbl(['Equipment', 'Student', 'Date', 'Status'], [...rp].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 6).map(r => `<tr><td><span class="nm">${esc(r.equipmentTitle)}</span><small>${esc(r.title)}</small></td><td>${esc(r.reporter)}</td><td>${fmtShort(r.createdAt)}</td><td>${badge(r.stage)}</td></tr>`).join(''), ['No repair requests', 'Reported problems appear here.'])}</div>` : '';
+    const feedCard = `<div class="card sect"><div class="card-h">${ICON.pulse}<div class="ttl"><h2>Activity feed</h2><small>Changes to equipment and reservations.</small></div></div>
+        ${d.feed.length ? d.feed.slice(0, 8).map(e => `<div class="ev">${esc(e.message)}<small>${fmt(e.createdAt)}</small></div>`).join('') : '<div class="empty" style="border-top:1px solid var(--border)"><b>No activity yet</b>Changes to equipment and reservations appear here.</div>'}</div>`;
+
+    view.innerHTML = `<div class="page-head"><div><h1>Equipment Availability</h1><p class="sub">${fmtDay(sc.date)} · ${hh(sc.openHour)}:00 – ${hh(sc.closeHour)}:00</p></div>
+        <div class="datenav"><button class="btn icon" id="d-prev" aria-label="Previous day" ${sched.date <= today ? 'disabled' : ''}>${ICON.left}</button><button class="btn" id="d-today">${ICON.bookings}Today</button><button class="btn icon" id="d-next" aria-label="Next day" ${sched.date >= last ? 'disabled' : ''}>${ICON.right}</button></div></div>
+      <div class="grid g4">
+        ${stat('Total Equipment', eq.total, 'registered in the lab', '', ICON.equipment)}
+        ${stat('Available Now', eq.available, `${pct}% of total`, 'ok', ICON.check)}
+        ${stat('In Use Now', eq.reserved, `${bookedSlots} slot${bookedSlots === 1 ? '' : 's'} booked on this date`, 'warn', ICON.clock)}
+        ${stat('Under Maintenance', eq.maintenance, d.admin ? `${d.admin.repairsOpen} open repair request${d.admin.repairsOpen === 1 ? '' : 's'}` : 'cannot be booked', 'bad', ICON.repairs)}
+      </div>
+      <div class="card sect"><div class="card-h">${ICON.bookings}<div class="ttl"><h2>Equipment Schedule</h2><small>${isAdmin() ? 'Hourly availability of all equipment.' : 'Click a free slot to reserve it.'}</small></div>
+        <div class="right legend"><span><i class="l-free"></i>Free</span><span><i class="l-taken"></i>Unavailable</span>${isAdmin() ? '' : '<span><i class="l-mine"></i>Yours</span>'}<span><i class="l-maint"></i>Maintenance</span></div></div>${schedule}</div>
+      ${bookingsCard}${repairsCard}${feedCard}`;
+
+    const go = date => { sched.date = date; draw(); };
+    document.getElementById('d-prev').onclick = () => go(addDays(sched.date, -1));
+    document.getElementById('d-next').onclick = () => go(addDays(sched.date, 1));
+    document.getElementById('d-today').onclick = () => go(today);
+    document.getElementById('sched-all')?.addEventListener('click', () => { sched.all = !sched.all; draw(); });
+    view.querySelectorAll('[data-bk]').forEach(b => b.onclick = () => { dashBk = b.dataset.bk; draw(); });
+    const byId = Object.fromEntries(rows.map(r => [r.id, r]));
+    view.querySelectorAll('.cell.go').forEach(b => b.onclick = () => bookModal(byId[b.dataset.eq], draw, { start: b.dataset.start }));
   };
-  await draw(); timers.push(setInterval(draw, 10000));
+  await draw(); timers.push(setInterval(() => { if (!document.querySelector('.ov')) draw().catch(() => { }); }, 15000));
 }
 
+
+
 /* ---------- equipment ---------- */
+const statusOptions = sel => [['AVAILABLE', 'Available'], ['RESERVED', 'Reserved'], ['MAINTENANCE', 'Maintenance']].map(([v, t]) => `<option value="${v}" ${sel === v ? 'selected' : ''}>${t}</option>`).join('');
+
 async function equipment(view) {
   const draw = async () => {
     const p = new URLSearchParams({ q: eqState.q, category: eqState.category, status: eqState.status, sort: eqState.sort, page: eqState.page, pageSize: 9 });
-    const d = await api('/equipment?' + p);
+    let d; try { d = await api('/equipment?' + p); } catch (e) { if (!e.handled) loadFailed(view); return; }
     const pages = Math.max(1, Math.ceil(d.total / d.pageSize));
     const tab = (k, t, n) => `<button class="tab ${eqState.status === k ? 'active' : ''}" data-tab="${k}">${t}<span>${n}</span></button>`;
-    view.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:start"><div><h1>Equipment</h1><p class="sub">Browse laboratory equipment${isAdmin() ? ' and manage the inventory' : ', book it and report problems'}.</p></div>
-      ${isAdmin() ? '<button class="btn primary" id="add">+ Add Equipment</button>' : ''}</div>
-      <div class="toolbar"><input id="q" placeholder="Search by name or inventory number" value="${esc(eqState.q)}">
-        <select id="stat"><option value="">All statuses</option>${[['AVAILABLE', 'Available'], ['RESERVED', 'Reserved'], ['MAINTENANCE', 'Maintenance']].map(([v, t]) => `<option value="${v}" ${eqState.status === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
+    view.innerHTML = `<div class="page-head"><div><h1>Equipment</h1><p class="sub">Browse laboratory equipment${isAdmin() ? ' and manage the inventory' : ', book it and report problems'}.</p></div></div>
+      <div class="toolbar"><div class="search">${ICON.search}<input id="q" placeholder="Search by name or inventory number" value="${esc(eqState.q)}"></div>
+        <select id="stat"><option value="">All statuses</option>${statusOptions(eqState.status)}</select>
         <select id="cat"><option value="">All categories</option>${d.categories.map(c => `<option ${c === eqState.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
         <select id="sort">${[['name', 'Sort: Name'], ['inventory', 'Sort: Inventory no.'], ['status', 'Sort: Status'], ['newest', 'Sort: Newest']].map(([v, t]) => `<option value="${v}" ${eqState.sort === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
       <div class="tabs">${tab('', 'All Equipment', d.counts.all)}${tab('AVAILABLE', 'Available', d.counts.available)}${tab('RESERVED', 'Reserved', d.counts.reserved)}${tab('MAINTENANCE', 'Maintenance', d.counts.maintenance)}</div>
       ${d.items.length ? `<div class="grid g3">${d.items.map(card).join('')}</div>` : '<div class="card empty"><b>No equipment found</b>Try another search or filter.</div>'}
       <div class="pager"><span>Showing ${d.items.length} of ${d.total} items</span><div>
-        <button class="btn sm" id="prev" ${eqState.page <= 1 ? 'disabled' : ''}>‹ Prev</button><span style="padding:4px 8px">Page ${d.page} / ${pages}</span>
+        <button class="btn sm" id="prev" ${eqState.page <= 1 ? 'disabled' : ''}>‹ Prev</button><span>Page ${d.page} / ${pages}</span>
         <button class="btn sm" id="next" ${eqState.page >= pages ? 'disabled' : ''}>Next ›</button></div></div>`;
     let t; const q = document.getElementById('q');
     q.oninput = () => { clearTimeout(t); t = setTimeout(async () => { eqState.q = q.value; eqState.page = 1; await draw(); const n = document.getElementById('q'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 300); };
@@ -189,7 +298,6 @@ async function equipment(view) {
     view.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { eqState.status = b.dataset.tab; eqState.page = 1; draw(); });
     document.getElementById('prev').onclick = () => { eqState.page--; draw(); };
     document.getElementById('next').onclick = () => { eqState.page++; draw(); };
-    document.getElementById('add')?.addEventListener('click', () => equipmentForm(null, draw));
     const byId = Object.fromEntries(d.items.map(e => [e.id, e]));
     view.querySelectorAll('[data-act]').forEach(b => b.onclick = () => {
       const e = byId[b.dataset.id];
@@ -203,6 +311,7 @@ async function equipment(view) {
 const thumb = e => e.hasImage
   ? `<img class="photo" src="/api/equipment/${e.id}/image?v=${e.imageVersion}" alt="Photo of ${esc(e.title)}" loading="lazy">`
   : (typeof equipmentArt === 'function' ? equipmentArt(e) : '');
+
 
 /* Photos: shrink in the browser (max 900 px, JPEG) before upload, so files stay small and uniform. */
 async function shrinkImage(file, max = 900) {
@@ -221,20 +330,23 @@ async function uploadPhoto(id, file) {
   if (!res.ok) { let m = 'Photo upload failed'; try { m = (await res.json()).error || m; } catch { } throw { message: m, fields: {} }; }
 }
 
+
+
 function card(e) {
   const maint = e.status === 'MAINTENANCE';
   const acts = isAdmin()
     ? `<button class="btn" data-act="edit" data-id="${e.id}">Edit</button><button class="btn danger" data-act="del" data-id="${e.id}">Remove</button>`
     : `<button class="btn primary" data-act="book" data-id="${e.id}" ${maint ? 'disabled title="Equipment is under maintenance"' : ''}>Book</button><button class="btn" data-act="report" data-id="${e.id}">Report Issue</button>`;
   return `<div class="card eq st-${e.status}"><div class="thumb">${thumb(e)}</div><h3>${esc(e.title)}</h3>
-    <div class="meta">Inv. No.: ${esc(e.inventoryNumber)}</div><div class="meta">📍 ${esc(e.location)} · ${esc(e.category)}</div>
+    <div class="meta">Inv. No.: ${esc(e.inventoryNumber)}</div><div class="meta">${esc(e.location)} · ${esc(e.category)}</div>
     <div class="row">${badge(e.status)}</div><div class="acts">${acts}</div></div>`;
 }
 
-async function bookModal(e, refresh) {
-  let sel = null; const today = new Date();
+/* opts.start: ISO start of a slot to pre-select (used by the dashboard schedule) */
+async function bookModal(e, refresh, opts = {}) {
+  let sel = null, pre = opts.start || null; const today = new Date();
   modal(`<h2>Book ${esc(e.title)}</h2><p class="sub" style="margin-bottom:0">${esc(e.inventoryNumber)} · ${esc(e.location)}${e.status === 'RESERVED' ? ' · currently in use, pick a free slot for another time' : ''}</p>
-    <label>Date</label><input type="date" id="bd" value="${ymd(today)}" min="${ymd(today)}">
+    <label>Date</label><input type="date" id="bd" value="${pre ? pre.slice(0, 10) : ymd(today)}" min="${ymd(today)}">
     <label>Available one-hour slots</label><div class="slots" id="slots"></div><div id="e-start"></div>
     <label>Purpose</label><textarea id="bdesc" rows="3" maxlength="500" placeholder="What will you use the equipment for?"></textarea><div id="e-desc"></div><div id="e-gen"></div>
     <div class="foot"><button class="btn" id="cx">Cancel</button><button class="btn primary" id="ok">Submit request</button></div>`, (m, close) => {
@@ -243,7 +355,7 @@ async function bookModal(e, refresh) {
       const dateEl = m.querySelector('#bd');
       let d = await api(`/equipment/${e.id}/slots?date=${dateEl.value}`);
       // every slot of today already started -> continue with tomorrow
-      if (d.slots.length && d.slots.every(s => s.state === 'past')) {
+      if (!pre && d.slots.length && d.slots.every(s => s.state === 'past')) {
         const t = new Date(dateEl.value + 'T00:00:00'); t.setDate(t.getDate() + 1); dateEl.value = ymd(t);
         d = await api(`/equipment/${e.id}/slots?date=${dateEl.value}`);
       }
@@ -255,14 +367,15 @@ async function bookModal(e, refresh) {
         return `<button class="slot" data-s="${s.start}" ${free ? '' : 'disabled'} title="${s.state}">${fmtT(s.start)}–${fmtT(s.end)}${s.state === 'mine' ? '<br><small>yours</small>' : s.state === 'taken' ? '<br><small>taken</small>' : ''}</button>`;
       }).join('');
       m.querySelectorAll('.slot:not(:disabled)').forEach(b => b.onclick = () => { m.querySelectorAll('.slot').forEach(x => x.classList.remove('sel')); b.classList.add('sel'); sel = b.dataset.s; });
+      if (pre) { m.querySelector(`.slot[data-s="${pre}"]:not(:disabled)`)?.click(); pre = null; }
     };
-    m.querySelector('#bd').onchange = loadSlots; loadSlots();
+    m.querySelector('#bd').onchange = () => { pre = null; loadSlots(); }; loadSlots();
     m.querySelector('#cx').onclick = close;
     m.querySelector('#ok').onclick = async () => {
       m.querySelectorAll('.err').forEach(x => x.remove());
       try {
         await api('/bookings', 'POST', { equipmentId: e.id, start: sel, description: m.querySelector('#bdesc').value });
-        close(); toast('Booking request sent - waiting for administrator'); refresh();
+        close(); toast('Booking request sent - waiting for administrator'); refresh?.();
       } catch (er) {
         if (er.handled) return;
         m.querySelector('#e-start').innerHTML = fieldErr(er.fields, 'start'); m.querySelector('#e-desc').innerHTML = fieldErr(er.fields, 'description');
@@ -273,16 +386,34 @@ async function bookModal(e, refresh) {
   });
 }
 
-function reportModal(e) {
-  modal(`<h2>Report a problem</h2><p class="sub" style="margin-bottom:0">${esc(e.title)} (${esc(e.inventoryNumber)})</p>
+/* top-bar "New Booking": pick the equipment first, then continue in the normal booking dialog */
+async function newBookingModal(refresh) {
+  let items;
+  try { items = (await api('/equipment?pageSize=60&sort=name')).items; } catch { return; }
+  const free = items.filter(i => i.status !== 'MAINTENANCE');
+  if (!free.length) { toast('No equipment is available for booking right now', true); return; }
+  modal(`<h2>New booking</h2><p class="sub">Choose the equipment you want to reserve.</p>
+    <label for="nb">Equipment</label><select id="nb">${free.map(i => `<option value="${i.id}">${esc(i.title)} (${esc(i.inventoryNumber)})</option>`).join('')}</select>
+    <div class="foot"><button class="btn" id="cx">Cancel</button><button class="btn primary" id="ok">Continue</button></div>`, (m, close) => {
+    m.querySelector('#cx').onclick = close;
+    m.querySelector('#ok').onclick = () => { const e = free.find(i => String(i.id) === m.querySelector('#nb').value); close(); if (e) bookModal(e, refresh); };
+  });
+}
+
+/* e = equipment to report on, or null to let the student choose it in the dialog */
+async function reportModal(e, refresh) {
+  let items = [];
+  if (!e) { try { items = (await api('/equipment?pageSize=60&sort=name')).items; } catch { return; } if (!items.length) { toast('There is no equipment to report on yet', true); return; } }
+  modal(`<h2>Report a problem</h2>${e ? `<p class="sub" style="margin-bottom:0">${esc(e.title)} (${esc(e.inventoryNumber)})</p>`
+      : `<label for="re">Equipment</label><select id="re">${items.map(i => `<option value="${i.id}">${esc(i.title)} (${esc(i.inventoryNumber)})</option>`).join('')}</select>`}
     <label>Title</label><input id="rt" maxlength="50" placeholder="Short summary"><div id="e-title"></div>
     <label>Description (please write in English - the AI assistant works in English)</label><textarea id="rd" rows="5" maxlength="500" placeholder="Describe what is wrong"></textarea><div id="e-desc"></div>
     <div class="foot"><button class="btn" id="cx">Cancel</button><button class="btn primary" id="ok">Submit report</button></div>`, (m, close) => {
     m.querySelector('#cx').onclick = close;
     m.querySelector('#ok').onclick = async () => {
       try {
-        await api('/repairs', 'POST', { equipmentId: e.id, title: m.querySelector('#rt').value, description: m.querySelector('#rd').value });
-        close(); toast('Problem report submitted');
+        await api('/repairs', 'POST', { equipmentId: e ? e.id : Number(m.querySelector('#re').value), title: m.querySelector('#rt').value, description: m.querySelector('#rd').value });
+        close(); toast('Problem report submitted'); refresh?.();
       } catch (er) {
         if (er.handled) return;
         m.querySelector('#e-title').innerHTML = fieldErr(er.fields, 'title'); m.querySelector('#e-desc').innerHTML = fieldErr(er.fields, 'description');
@@ -290,6 +421,7 @@ function reportModal(e) {
     };
   });
 }
+
 
 function equipmentForm(e, refresh) {
   const v = e || { inventoryNumber: '', title: '', description: '', location: '', category: '', status: 'AVAILABLE' };
@@ -342,17 +474,70 @@ async function deleteFlow(e, refresh) {
   refresh();
 }
 
+
+
+/* ---------- inventory (admin): dense table with the same create / edit / delete flows ---------- */
+async function inventory(view) {
+  const draw = async () => {
+    const p = new URLSearchParams({ q: invState.q, category: invState.category, status: invState.status, sort: 'inventory', page: invState.page, pageSize: 12 });
+    let d; try { d = await api('/equipment?' + p); } catch (e) { if (!e.handled) loadFailed(view); return; }
+    const pages = Math.max(1, Math.ceil(d.total / d.pageSize));
+    view.innerHTML = `<div class="page-head"><div><h1>Inventory</h1><p class="sub">All laboratory equipment with its inventory number, location and status.</p></div></div>
+      <div class="toolbar"><div class="search">${ICON.search}<input id="q" placeholder="Search by name or inventory number" value="${esc(invState.q)}"></div>
+        <select id="stat"><option value="">All statuses</option>${statusOptions(invState.status)}</select>
+        <select id="cat"><option value="">All categories</option>${d.categories.map(c => `<option ${c === invState.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
+      <div class="card tbl">${d.items.length ? `<table><thead><tr><th>Equipment</th><th>Inventory no.</th><th>Category</th><th>Location</th><th>Status</th><th></th></tr></thead><tbody>
+        ${d.items.map(e => `<tr><td><div class="cellflex"><div class="thumb-s">${thumb(e)}</div><span class="nm">${esc(e.title)}</span></div></td><td>${esc(e.inventoryNumber)}</td><td>${esc(e.category)}</td><td>${esc(e.location)}</td><td>${badge(e.status)}</td>
+          <td><div class="acts-cell"><button class="btn sm" data-act="edit" data-id="${e.id}">Edit</button><button class="btn sm danger" data-act="del" data-id="${e.id}">Remove</button></div></td></tr>`).join('')}</tbody></table>`
+        : '<div class="empty"><b>No equipment found</b>Try another search or filter.</div>'}</div>
+      <div class="pager"><span>Showing ${d.items.length} of ${d.total} items</span><div>
+        <button class="btn sm" id="prev" ${invState.page <= 1 ? 'disabled' : ''}>‹ Prev</button><span>Page ${d.page} / ${pages}</span>
+        <button class="btn sm" id="next" ${invState.page >= pages ? 'disabled' : ''}>Next ›</button></div></div>`;
+    let t; const q = document.getElementById('q');
+    q.oninput = () => { clearTimeout(t); t = setTimeout(async () => { invState.q = q.value; invState.page = 1; await draw(); const n = document.getElementById('q'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 300); };
+    document.getElementById('cat').onchange = e => { invState.category = e.target.value; invState.page = 1; draw(); };
+    document.getElementById('stat').onchange = e => { invState.status = e.target.value; invState.page = 1; draw(); };
+    document.getElementById('prev').onclick = () => { invState.page--; draw(); };
+    document.getElementById('next').onclick = () => { invState.page++; draw(); };
+    const byId = Object.fromEntries(d.items.map(e => [e.id, e]));
+    view.querySelectorAll('[data-act]').forEach(b => b.onclick = () => {
+      const e = byId[b.dataset.id];
+      ({ edit: () => equipmentForm(e, draw), del: () => deleteFlow(e, draw) })[b.dataset.act]();
+    });
+  };
+  await draw();
+  timers.push(setInterval(() => { if (!document.querySelector('.ov') && document.activeElement?.id !== 'q') draw().catch(() => { }); }, 15000));
+}
+
+/* ---------- students (admin) ---------- */
+async function students(view) {
+  let list;
+  try { list = await api('/students'); } catch (e) { if (!e.handled) loadFailed(view); return; }
+  view.innerHTML = `<div class="page-head"><div><h1>Students</h1><p class="sub">${list.length} registered student${list.length === 1 ? '' : 's'} and their activity.</p></div></div>
+    <div class="toolbar"><div class="search">${ICON.search}<input id="sq" placeholder="Search by name or e-mail"></div></div><div class="card tbl people" id="stbl"></div>`;
+  const render = () => {
+    const f = document.getElementById('sq').value.trim().toLowerCase();
+    const rows = list.filter(s => !f || `${s.name} ${s.surname} ${s.email}`.toLowerCase().includes(f));
+    document.getElementById('stbl').innerHTML = rows.length
+      ? `<table><thead><tr><th>Student</th><th>E-mail</th><th>Registered</th><th>Bookings</th><th>Active</th><th>Reports</th></tr></thead><tbody>
+        ${rows.map(s => `<tr><td><div class="cellflex"><span class="avatar">${esc((s.name[0] || '') + (s.surname[0] || ''))}</span><span class="nm">${esc(s.name)} ${esc(s.surname)}</span></div></td><td>${esc(s.email)}</td>
+          <td>${new Date(s.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</td><td>${s.bookings}</td><td>${s.activeBookings ? `<span class="badge b-confirmed">${s.activeBookings} active</span>` : '0'}</td><td>${s.repairs}</td></tr>`).join('')}</tbody></table>`
+      : '<div class="empty"><b>No students found</b>Try another search.</div>';
+  };
+  document.getElementById('sq').oninput = render; render();
+}
+
 /* ---------- bookings ---------- */
 async function bookings(view) {
   let filter = '';
   const draw = async () => {
-    const list = await api('/bookings' + (filter ? `?status=${filter}` : ''));
+    let list; try { list = await api('/bookings' + (filter ? `?status=${filter}` : '')); } catch (e) { if (!e.handled) loadFailed(view); return; }
     const statuses = ['PENDING', 'CONFIRMED', 'IN_PROGRESS', 'FINISHED', 'REJECTED', 'CANCELED'];
-    view.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:start"><div><h1>Bookings</h1><p class="sub">${isAdmin() ? 'Review and manage booking requests.' : 'Track and cancel your bookings. Create new ones from the Equipment page.'}</p></div>
-      <select id="flt" style="width:180px"><option value="">All statuses</option>${statuses.map(s => `<option value="${s}" ${filter === s ? 'selected' : ''}>${label(s)}</option>`).join('')}</select></div>
+    view.innerHTML = `<div class="page-head"><div><h1>${isAdmin() ? 'Bookings' : 'My Bookings'}</h1><p class="sub">${isAdmin() ? 'Review and manage booking requests.' : 'Track and cancel your bookings. Create new ones with New Booking or from the schedule.'}</p></div>
+      <div class="tools"><select id="flt" style="width:180px"><option value="">All statuses</option>${statuses.map(s => `<option value="${s}" ${filter === s ? 'selected' : ''}>${label(s)}</option>`).join('')}</select></div></div>
       <div class="card tbl">${list.length ? `<table><thead><tr><th>Equipment</th>${isAdmin() ? '<th>Student</th>' : ''}<th>Time</th><th>Purpose</th><th>Status</th><th></th></tr></thead><tbody>
-      ${list.map(b => `<tr><td><b>${esc(b.equipmentTitle)}</b><br><small>${esc(b.inventoryNumber)} · ${esc(b.location)}</small></td>
-        ${isAdmin() ? `<td>${esc(b.studentName)}<br><small>${esc(b.studentEmail)}</small></td>` : ''}
+      ${list.map(b => `<tr><td><span class="nm">${esc(b.equipmentTitle)}</span><small>${esc(b.inventoryNumber)} · ${esc(b.location)}</small></td>
+        ${isAdmin() ? `<td>${esc(b.studentName)}<small>${esc(b.studentEmail)}</small></td>` : ''}
         <td>${fmt(b.start)}–${fmtT(b.end)}</td><td>${esc(b.description)}</td><td>${badge(b.status)}</td>
         <td><div class="acts-cell">${b.canDecide ? `<button class="btn sm primary" data-a="approve" data-id="${b.id}">Approve</button><button class="btn sm danger" data-a="reject" data-id="${b.id}">Reject</button>` : ''}
         ${b.canCancel ? `<button class="btn sm" data-a="cancel" data-id="${b.id}">Cancel</button>` : ''}</div></td></tr>`).join('')}</tbody></table>` : '<div class="empty"><b>No bookings</b>Nothing matches this filter.</div>'}</div>`;
@@ -367,6 +552,7 @@ async function bookings(view) {
   };
   await draw(); timers.push(setInterval(() => { if (!document.querySelector('.ov')) draw().catch(() => { }); }, 15000));
 }
+
 
 /* ---------- repair requests ---------- */
 const STAGE = { AWAITING_REVIEW: 'Awaiting review', IN_REPAIR: 'In repair', RESOLVED: 'Resolved', NO_REPAIR_REQUIRED: 'No repair required' };
@@ -407,10 +593,12 @@ async function repairs(view) {
         ? `<button class="btn primary sm" data-a="complete" data-w="true" data-id="${r.id}">Repair checked - equipment works</button><button class="btn sm" data-a="complete" data-w="false" data-id="${r.id}">Checked - still not working</button>`
         : `<button class="btn primary sm" data-a="confirm" data-id="${r.id}">Confirm problem</button><button class="btn sm" data-a="dismiss" data-id="${r.id}">Not confirmed - close</button>`;
     };
-    view.innerHTML = `<h1>Repair Requests</h1><p class="sub">${isAdmin() ? 'Review reported problems and track repairs.' : 'Problems you reported. Use "Report Issue" on the Equipment page to create one.'}</p>
+    view.innerHTML = `<div class="page-head"><div><h1>${isAdmin() ? 'Repair Requests' : 'Report Issue'}</h1><p class="sub">${isAdmin() ? 'Review reported problems and track repairs.' : 'Report a faulty piece of equipment and follow the problems you reported.'}</p></div>
+      ${isAdmin() ? '' : `<div class="tools"><button class="btn primary" id="new-rep">${ICON.plus}New report</button></div>`}</div>
       ${list.length ? list.map(r => `<div class="card rep"><div class="head"><div><b>${esc(r.title)}</b><div class="sub" style="margin:0">${esc(r.equipmentTitle)} (${esc(r.inventoryNumber)}) · ${esc(r.location)}${isAdmin() ? ` · by ${esc(r.reporter)}` : ''} · ${fmt(r.createdAt)}</div></div>
         <div>${badge(r.stage)}</div></div>
         <p>${esc(r.description)}</p>${aiBox(r)}<div class="acts">${actions(r)}</div></div>`).join('') : '<div class="card empty"><b>No repair requests</b>Reported problems appear here.</div>'}`;
+    document.getElementById('new-rep')?.addEventListener('click', () => reportModal(null, draw));
     view.querySelectorAll('[data-a]').forEach(btn => btn.onclick = async () => {
       const a = btn.dataset.a;
       if (a === 'confirm' && !(await confirmBox('Confirm problem?', 'Equipment goes to MAINTENANCE and all pending/confirmed bookings are canceled.', 'Confirm', true))) return;
@@ -423,5 +611,6 @@ async function repairs(view) {
   };
   await draw(); timers.push(setInterval(() => { if (!document.querySelector('.ov')) draw().catch(() => { }); }, 15000));
 }
+
 
 route();

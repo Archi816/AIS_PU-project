@@ -1,0 +1,1666 @@
+diff --git a/README.md b/README.md
+index 9f9b252..ffe9584 100644
+--- a/README.md
++++ b/README.md
+@@ -179,6 +179,20 @@ Backend settings for the split: `Security__BehindProxy=true` (set in the compose
+ `X-Forwarded-For` / `X-Forwarded-Proto` from the frontend container. Do not publish the backend port to the internet in this mode.
+ Frontend setting: `BACKEND_URL` (default `http://backend:8080`) is the address nginx proxies `/api/*` to.
+ 
++## E-mail notifications (optional)
++
++Students get an e-mail when a booking request is received, confirmed, rejected or canceled (also when the system
++cancels it: maintenance, removed equipment, no decision within 24 h). A **confirmed** booking carries an `.ics` calendar
++file (Google Calendar, Outlook, Apple) and an "Add to Google Calendar" link; canceling a confirmed booking sends an
++`.ics` with `METHOD:CANCEL` and the same UID, so the event disappears from the calendar. Each student can switch e-mails
++off in **Profile**. Messages are sent by a background worker (MailKit/SMTP): a failing mail server never breaks a booking.
++
++Set the SMTP server in `backend/.env` (see `.env.example`): `Smtp__Host`, `Smtp__Port`, `Smtp__User`, `Smtp__Password`,
++`Smtp__From`, `Smtp__PublicUrl`. With an empty `Smtp__Host` e-mails are simply off.
++
++**Database note:** new columns (`Equipment.specifications/contact_name/contact_email`, `Users.email_notifications`) are added
++automatically to an existing database when the backend starts (`Services/SchemaUpgrade.cs`), no data is lost.
++
+ ## Architecture
+ 
+ ![architecture](docs/assets/architecture.png)
+diff --git a/backend/.env.example b/backend/.env.example
+index daa0ead..c432bc5 100644
+--- a/backend/.env.example
++++ b/backend/.env.example
+@@ -8,3 +8,13 @@ AiService__ServiceKey=YOUR_SHARED_SERVICE_KEY
+ # Required to create the first administrator in the production container.
+ Seed__AdminEmail=admin@example.com
+ Seed__AdminPassword=REPLACE_WITH_STRONG_PASSWORD
++
++# ---- E-mail notifications (optional). Leave Smtp__Host empty to switch e-mails off. ----
++# Booking e-mails go to students who have notifications enabled in their profile; a confirmed booking carries an .ics calendar file.
++Smtp__Host=
++Smtp__Port=587
++Smtp__User=
++Smtp__Password=
++Smtp__From=LEMS <no-reply@your-domain.sk>
++# Public address of the web UI, used for the "Open LEMS" link in e-mails (optional)
++Smtp__PublicUrl=http://localhost:5000
+diff --git a/backend/Api.cs b/backend/Api.cs
+index 2c286d8..aa4dada 100644
+--- a/backend/Api.cs
++++ b/backend/Api.cs
+@@ -7,7 +7,10 @@ namespace Lems;
+ 
+ public record LoginReq(string? Email, string? Password);
+ public record RegisterReq(string? Email, string? Password, string? ConfirmPassword);
+-public record EquipmentReq(string? InventoryNumber, string? Title, string? Description, string? Location, string? Category, string? Status);
++public record EquipmentReq(string? InventoryNumber, string? Title, string? Description, string? Location, string? Category, string? Status,
++    string? Specifications = null, string? ContactName = null, string? ContactEmail = null);
++public record ProfileReq(string? Name, string? Surname, bool? EmailNotifications);
++public record PasswordReq(string? CurrentPassword, string? NewPassword, string? ConfirmPassword);
+ public record BookingReq(int EquipmentId, DateTime? Start, string? Description);
+ public record RepairReq(int EquipmentId, string? Title, string? Description);
+ public record CompleteReq(bool Working);
+@@ -16,6 +19,8 @@ public record CompleteReq(bool Working);
+ public static class Api
+ {
+     static readonly SemaphoreSlim BookLock = new(1, 1);
++    static readonly Regex AnyEmail = new(@"^[^@\s]+@[^@\s]+\.[^@\s]+$", RegexOptions.Compiled);
++    static readonly Regex PersonName = new(@"^\p{L}[\p{L} '\-]*$", RegexOptions.Compiled);
+     static readonly Regex StudentEmail = new(@"^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*@student\.tuke\.sk$", RegexOptions.Compiled);
+ 
+     // ---------- helpers ----------
+@@ -45,11 +50,12 @@ public static class Api
+         return await core.Users.Where(u => list.Contains(u.Id)).ToDictionaryAsync(u => u.Id);
+     }
+ 
+-    static object UserDto(User u) => new { u.Id, u.Name, u.Surname, u.Email, role = u.Role };
++    static object UserDto(User u) => new { u.Id, u.Name, u.Surname, u.Email, role = u.Role, emailNotifications = u.EmailNotifications };
+ 
+     static object EqDto(Equipment e, DateTime? imageUpdated = null) => new
+     {
+         e.Id, inventoryNumber = e.InventoryNumber, e.Title, e.Description, e.Location, e.Category, e.Status, createdAt = e.CreatedAt,
++        specifications = e.Specifications, contactName = e.ContactName, contactEmail = e.ContactEmail,
+         hasImage = imageUpdated != null, imageVersion = imageUpdated?.Ticks ?? 0L
+     };
+ 
+@@ -85,6 +91,11 @@ public static class Api
+         if (loc.Length == 0 || loc.Length > 20) e["location"] = "Required, max 20 characters";
+         if (cat.Length == 0 || cat.Length > 30) e["category"] = "Required, max 30 characters";
+         if ((r.Description?.Length ?? 0) > 250) e["description"] = "Max 250 characters";
++        if ((r.Specifications?.Trim().Length ?? 0) > 1000) e["specifications"] = "Max 1000 characters";
++        var cn = r.ContactName?.Trim() ?? "";
++        var ce = r.ContactEmail?.Trim() ?? "";
++        if (cn.Length > 50) e["contactName"] = "Max 50 characters";
++        if (ce.Length > 100 || (ce.Length > 0 && !AnyEmail.IsMatch(ce))) e["contactEmail"] = "Enter a valid e-mail address (max 100 characters)";
+         return e;
+     }
+ 
+@@ -126,6 +137,10 @@ public static class Api
+         api.MapPost("/repairs/{id:int}/analyze", AnalyzeRepair);
+ 
+         api.MapGet("/students", ListStudents);
++        api.MapGet("/reports", Reports);
++
++        api.MapPut("/profile", UpdateProfile);
++        api.MapPost("/profile/password", ChangePassword);
+ 
+         api.MapGet("/notifications", ListNotifications);
+         api.MapPost("/notifications/read-all", ReadAll);
+@@ -304,7 +319,8 @@ public static class Api
+         var eq = new Equipment
+         {
+             InventoryNumber = inv, Title = req.Title!.Trim(), Description = req.Description?.Trim() ?? "",
+-            Location = req.Location!.Trim(), Category = req.Category!.Trim(), Status = EquipmentStatus.AVAILABLE
++            Location = req.Location!.Trim(), Category = req.Category!.Trim(), Status = EquipmentStatus.AVAILABLE,
++            Specifications = req.Specifications?.Trim() ?? "", ContactName = req.ContactName?.Trim() ?? "", ContactEmail = req.ContactEmail?.Trim() ?? ""
+         };
+         core.Equipment.Add(eq);
+         var fail = await TrySave(core);
+@@ -314,7 +330,7 @@ public static class Api
+         return Results.Ok(EqDto(eq));
+     }
+ 
+-    static async Task<IResult> UpdateEquipment(int id, EquipmentReq req, HttpContext http, CoreDb core, OpsDb ops)
++    static async Task<IResult> UpdateEquipment(int id, EquipmentReq req, HttpContext http, CoreDb core, OpsDb ops, IMailQueue mail)
+     {
+         var me = Security.Current(http);
+         if (me == null) return Unauth();
+@@ -327,7 +343,7 @@ public static class Api
+         if (await core.Equipment.AnyAsync(e => e.InventoryNumber == inv && e.Id != id))
+             return Err(409, "Duplicate inventory number", new { inventoryNumber = "Inventory number already exists" });
+ 
+-        var d = new Domain(core, ops);
++        var d = new Domain(core, ops, mail);
+         var changed = new List<string>();
+         void Set(string name, string oldV, string newV, Action<string> apply)
+         {
+@@ -338,6 +354,9 @@ public static class Api
+         Set("description", eq.Description, req.Description?.Trim() ?? "", v => eq.Description = v);
+         Set("location", eq.Location, req.Location!.Trim(), v => eq.Location = v);
+         Set("category", eq.Category, req.Category!.Trim(), v => eq.Category = v);
++        Set("specifications", eq.Specifications, req.Specifications?.Trim() ?? "", v => eq.Specifications = v);
++        Set("contact name", eq.ContactName, req.ContactName?.Trim() ?? "", v => eq.ContactName = v);
++        Set("contact e-mail", eq.ContactEmail, req.ContactEmail?.Trim() ?? "", v => eq.ContactEmail = v);
+ 
+         try
+         {
+@@ -358,18 +377,19 @@ public static class Api
+         // Ops: cancellations, notifications, events. If this fails the admin can repeat the action (idempotent).
+         var fail = await TrySave(ops);
+         if (fail != null) return fail;
++        d.FlushMail();   // e-mails about bookings canceled by the maintenance switch
+         var img = await core.EquipmentImages.AsNoTracking().Where(i => i.EquipmentId == id).Select(i => (DateTime?)i.UpdatedAt).FirstOrDefaultAsync();
+         return Results.Ok(EqDto(eq, img));
+     }
+ 
+-    static async Task<IResult> DeleteEquipment(int id, HttpContext http, CoreDb core, OpsDb ops)
++    static async Task<IResult> DeleteEquipment(int id, HttpContext http, CoreDb core, OpsDb ops, IMailQueue mail)
+     {
+         var me = Security.Current(http);
+         if (me == null) return Unauth();
+         if (me.Role != Role.ADMIN) return Forbidden();
+         var eq = await core.Equipment.FindAsync(id);
+         if (eq == null) return NotFound("Equipment");
+-        var d = new Domain(core, ops);
++        var d = new Domain(core, ops, mail);
+ 
+         // BR-EQ-D-02: no blocking checks. Students with live bookings are only informed.
+         var live = await ops.Bookings.Where(b => b.EquipmentId == id &&
+@@ -386,9 +406,13 @@ public static class Api
+         try
+         {
+             foreach (var b in live)
++            {
+                 d.Notify(b.UserId, $"Your booking of {eq.Title} ({Domain.When(b)}) was canceled because the equipment was removed from the inventory.");
++                await d.StageBookingMail(b, eq, MailKind.Canceled, "the equipment was removed from the inventory", b.Status == BookingStatus.CONFIRMED);
++            }
+             d.Activity($"Equipment {eq.Title} (Inventory No.: {eq.InventoryNumber}) has been removed from the laboratory inventory at {eq.Location}.");
+             await ops.SaveChangesAsync();
++            d.FlushMail();
+             await ops.Bookings.Where(b => b.EquipmentId == id).ExecuteDeleteAsync();
+             await ops.RepairRequests.Where(r => r.EquipmentId == id).ExecuteDeleteAsync();
+         }
+@@ -497,10 +521,10 @@ public static class Api
+         if (me == null) return Unauth();
+         var day = DateOnly.FromDateTime(DateTime.Now);
+         if (!string.IsNullOrWhiteSpace(date) && !DateOnly.TryParse(date, out day)) return Err(400, "Invalid date");
+-        var from = day.ToDateTime(TimeOnly.MinValue);
+-        var to = from.AddDays(1);
++        var dayStart = day.ToDateTime(TimeOnly.MinValue);
++        var dayEnd = dayStart.AddDays(1);
+         var equipment = await core.Equipment.OrderBy(e => e.Title).ToListAsync();
+-        var busy = await ops.Bookings.Where(b => b.StartTime >= from && b.StartTime < to &&
++        var busy = await ops.Bookings.Where(b => b.StartTime >= dayStart && b.StartTime < dayEnd &&
+             (b.Status == BookingStatus.PENDING || b.Status == BookingStatus.CONFIRMED || b.Status == BookingStatus.IN_PROGRESS))
+             .Select(b => new { b.EquipmentId, b.StartTime, b.UserId }).ToListAsync();
+         var now = DateTime.Now;
+@@ -516,7 +540,7 @@ public static class Api
+             status = e.Status,
+             slots = Enumerable.Range(open, Math.Max(0, close - open)).Select(h =>
+             {
+-                var s = from.AddHours(h);
++                var s = dayStart.AddHours(h);
+                 var taken = busy.FirstOrDefault(b => b.EquipmentId == e.Id && b.StartTime == s);
+                 var state = e.Status == EquipmentStatus.MAINTENANCE ? "maintenance"
+                     : taken != null ? (taken.UserId == me.Id ? "mine" : "taken")
+@@ -525,7 +549,7 @@ public static class Api
+                 return new { hour = h, start = s, end = s.AddHours(1), state };
+             }).ToList()
+         }).ToList();
+-        return Results.Ok(new { date = day.ToString("yyyy-MM-dd"), openHour = open, closeHour = close, equipment = rows });
++        return Results.Ok(new { date = day.ToString("yyyy-MM-dd"), openHour = open, closeHour = close, maxDaysAhead = opt.Value.MaxDaysAhead, pendingTimeoutHours = opt.Value.PendingTimeoutHours, equipment = rows });
+     }
+ 
+     // ---------- bookings (Ops, joined with Core in code) ----------
+@@ -543,7 +567,7 @@ public static class Api
+         return Results.Ok(list.Select(b => BookingDto(b, eqs.GetValueOrDefault(b.EquipmentId), users.GetValueOrDefault(b.UserId), me, now)));
+     }
+ 
+-    static async Task<IResult> CreateBooking(BookingReq req, HttpContext http, CoreDb core, OpsDb ops, IOptions<LemsOptions> opt)
++    static async Task<IResult> CreateBooking(BookingReq req, HttpContext http, CoreDb core, OpsDb ops, IOptions<LemsOptions> opt, IMailQueue mail)
+     {
+         var me = Security.Current(http);
+         if (me == null) return Unauth();
+@@ -591,12 +615,15 @@ public static class Api
+                 await ops.SaveChangesAsync();
+                 return Err(409, "Equipment unavailable (under maintenance)");
+             }
++            var dm = new Domain(core, ops, mail);
++            await dm.StageBookingMail(booking, eq, MailKind.Received);   // "request received" - no calendar event yet (still PENDING)
++            dm.FlushMail();
+             return Results.Ok(BookingDto(booking, eq, user, me, now));
+         }
+         finally { BookLock.Release(); }
+     }
+ 
+-    static async Task<IResult> CancelBooking(int id, HttpContext http, CoreDb core, OpsDb ops)
++    static async Task<IResult> CancelBooking(int id, HttpContext http, CoreDb core, OpsDb ops, IMailQueue mail)
+     {
+         var me = Security.Current(http);
+         if (me == null) return Unauth();
+@@ -605,16 +632,21 @@ public static class Api
+         if ((b.Status != BookingStatus.PENDING && b.Status != BookingStatus.CONFIRMED) || DateTime.Now >= b.StartTime)
+             return Err(409, "Cancellation unavailable");
+         var eq = await core.Equipment.FindAsync(b.EquipmentId);
++        var was = b.Status;
+         b.Status = BookingStatus.CANCELED;      // releases the slot
+-        new Domain(core, ops).Notify(b.UserId, me.Role == Role.ADMIN && b.UserId != me.Id
++        var d = new Domain(core, ops, mail);
++        var byAdmin = me.Role == Role.ADMIN && b.UserId != me.Id;
++        d.Notify(b.UserId, byAdmin
+             ? $"Your booking of {eq?.Title} ({Domain.When(b)}) was canceled by an administrator."
+             : $"Your booking of {eq?.Title} ({Domain.When(b)}) has been canceled.");
++        await d.StageBookingMail(b, eq, MailKind.Canceled, byAdmin ? "it was canceled by an administrator" : null, was == BookingStatus.CONFIRMED);
+         var fail = await TrySave(ops);
+         if (fail != null) return fail;
++        d.FlushMail();
+         return Results.Ok(BookingDto(b, eq, null, me, DateTime.Now));
+     }
+ 
+-    static async Task<IResult> ApproveBooking(int id, HttpContext http, CoreDb core, OpsDb ops)
++    static async Task<IResult> ApproveBooking(int id, HttpContext http, CoreDb core, OpsDb ops, IMailQueue mail)
+     {
+         var me = Security.Current(http);
+         if (me == null) return Unauth();
+@@ -625,12 +657,13 @@ public static class Api
+         if (b.Status != BookingStatus.PENDING || b.StartTime <= now)
+             return Err(409, "Only a PENDING request whose start time has not yet arrived can be approved");
+         var eq = await core.Equipment.FindAsync(b.EquipmentId);
+-        var d = new Domain(core, ops);
++        var d = new Domain(core, ops, mail);
+         if (eq == null || eq.Status == EquipmentStatus.MAINTENANCE)
+         {
+             b.Status = BookingStatus.CANCELED;
+             d.Notify(b.UserId, $"Your booking of {eq?.Title ?? "the equipment"} ({Domain.When(b)}) was canceled because the equipment is unavailable.");
+-            await TrySave(ops);
++            await d.StageBookingMail(b, eq, MailKind.Canceled, "the equipment is unavailable", false);
++            if (await TrySave(ops) == null) d.FlushMail();
+             return Err(409, "Equipment is under maintenance - the booking was canceled");
+         }
+         b.Status = BookingStatus.CONFIRMED;     // Status is a concurrency token: loses against a parallel cancellation
+@@ -638,11 +671,13 @@ public static class Api
+         d.Activity($"{Domain.Eq(eq)} is now reserved from {b.StartTime:HH:mm} to {b.EndTime:HH:mm} on {b.StartTime:dd.MM.yyyy}.");
+         var fail = await TrySave(ops);
+         if (fail != null) return fail;
++        await d.StageBookingMail(b, eq, MailKind.Confirmed);   // confirmation with the .ics calendar file
++        d.FlushMail();
+         var u = await core.Users.FindAsync(b.UserId);
+         return Results.Ok(BookingDto(b, eq, u, me, now));
+     }
+ 
+-    static async Task<IResult> RejectBooking(int id, HttpContext http, CoreDb core, OpsDb ops)
++    static async Task<IResult> RejectBooking(int id, HttpContext http, CoreDb core, OpsDb ops, IMailQueue mail)
+     {
+         var me = Security.Current(http);
+         if (me == null) return Unauth();
+@@ -652,9 +687,12 @@ public static class Api
+         if (b.Status != BookingStatus.PENDING) return Err(409, "Only PENDING requests can be rejected");
+         var eq = await core.Equipment.FindAsync(b.EquipmentId);
+         b.Status = BookingStatus.REJECTED;      // releases the slot
+-        new Domain(core, ops).Notify(b.UserId, $"Your booking of {eq?.Title} ({Domain.When(b)}) has been rejected.");
++        var d = new Domain(core, ops, mail);
++        d.Notify(b.UserId, $"Your booking of {eq?.Title} ({Domain.When(b)}) has been rejected.");
++        await d.StageBookingMail(b, eq, MailKind.Rejected);
+         var fail = await TrySave(ops);
+         if (fail != null) return fail;
++        d.FlushMail();
+         return Results.Ok(BookingDto(b, eq, null, me, DateTime.Now));
+     }
+ 
+@@ -757,7 +795,7 @@ public static class Api
+     }
+ 
+     // Problem confirmed -> MAINTENANCE + cancel affected bookings (BR-RP-05). Safe to repeat.
+-    static async Task<IResult> ConfirmRepair(int id, HttpContext http, CoreDb core, OpsDb ops)
++    static async Task<IResult> ConfirmRepair(int id, HttpContext http, CoreDb core, OpsDb ops, IMailQueue mail)
+     {
+         var me = Security.Current(http);
+         if (me == null) return Unauth();
+@@ -767,20 +805,22 @@ public static class Api
+         if (r.Status != RepairStatus.OPEN || r.Confirmed) return Err(409, "The request is not awaiting review");
+         var eq = await core.Equipment.FindAsync(r.EquipmentId);
+         if (eq == null) return NotFound("Equipment");
+-        var d = new Domain(core, ops);
++        var d = new Domain(core, ops, mail);
+         try
+         {
+             await d.SetMaintenance(eq, "the equipment needs repair");   // Core first, then Ops cancellations
+             r.Confirmed = true;
+             d.Notify(r.CreatedBy, $"Your problem report \"{r.Title}\" was confirmed. {eq.Title} is under repair.");
++            await d.StageTextMail(r.CreatedBy, $"LEMS: problem report confirmed - {eq.Title}", $"Your problem report \"{r.Title}\" was confirmed. {eq.Title} is under repair.");
+             await ops.SaveChangesAsync();
++            d.FlushMail();
+         }
+         catch (DbUpdateException) { return Err(500, "Saving failed - please press the button again (the action is safe to repeat)."); }
+         return Results.Ok(RepairDto(r, eq, null, me));
+     }
+ 
+     // Problem not confirmed -> close, equipment unchanged (BR-RP-04)
+-    static async Task<IResult> DismissRepair(int id, HttpContext http, CoreDb core, OpsDb ops)
++    static async Task<IResult> DismissRepair(int id, HttpContext http, CoreDb core, OpsDb ops, IMailQueue mail)
+     {
+         var me = Security.Current(http);
+         if (me == null) return Unauth();
+@@ -790,14 +830,17 @@ public static class Api
+         if (r.Status != RepairStatus.OPEN || r.Confirmed) return Err(409, "The request is not awaiting review");
+         r.Status = RepairStatus.CLOSED;
+         r.Resolution = "NO_REPAIR_REQUIRED";
+-        new Domain(core, ops).Notify(r.CreatedBy, $"Your problem report \"{r.Title}\" was reviewed: no repair is required.");
++        var d = new Domain(core, ops, mail);
++        d.Notify(r.CreatedBy, $"Your problem report \"{r.Title}\" was reviewed: no repair is required.");
++        await d.StageTextMail(r.CreatedBy, "LEMS: problem report reviewed", $"Your problem report \"{r.Title}\" was reviewed: no repair is required.");
+         var fail = await TrySave(ops);
+         if (fail != null) return fail;
++        d.FlushMail();
+         return Results.Ok(RepairDto(r, await core.Equipment.FindAsync(r.EquipmentId), null, me));
+     }
+ 
+     // Result of repair inspected (BR-RP-07/08). Order: equipment back to service (Core) first, then close (Ops).
+-    static async Task<IResult> CompleteRepair(int id, CompleteReq req, HttpContext http, CoreDb core, OpsDb ops)
++    static async Task<IResult> CompleteRepair(int id, CompleteReq req, HttpContext http, CoreDb core, OpsDb ops, IMailQueue mail)
+     {
+         var me = Security.Current(http);
+         if (me == null) return Unauth();
+@@ -808,7 +851,7 @@ public static class Api
+         var eq = await core.Equipment.FindAsync(r.EquipmentId);
+         if (!req.Working) return Results.Ok(new { repeated = true, request = RepairDto(r, eq, null, me) });   // repair cycle repeats
+ 
+-        var d = new Domain(core, ops);
++        var d = new Domain(core, ops, mail);
+         try
+         {
+             // equipment returns to service only when no other confirmed repair is still open
+@@ -817,7 +860,9 @@ public static class Api
+             r.Status = RepairStatus.CLOSED;
+             r.Resolution = "RESOLVED";
+             d.Notify(r.CreatedBy, $"The repair for your report \"{r.Title}\" has been completed.");
++            await d.StageTextMail(r.CreatedBy, "LEMS: repair completed", $"The repair for your report \"{r.Title}\" has been completed.");
+             await ops.SaveChangesAsync();                                      // Ops
++            d.FlushMail();
+         }
+         catch (DbUpdateException) { return Err(500, "Saving failed - please press the button again (the action is safe to repeat)."); }
+         return Results.Ok(new { repeated = false, request = RepairDto(r, eq, null, me) });
+@@ -850,15 +895,128 @@ public static class Api
+         }));
+     }
+ 
++    // ---------- profile ----------
++    static async Task<IResult> UpdateProfile(ProfileReq req, HttpContext http, CoreDb core)
++    {
++        var me = Security.Current(http);
++        if (me == null) return Unauth();
++        var u = await core.Users.FindAsync(me.Id);
++        if (u == null) return Unauth();
++        var fields = new Dictionary<string, string>();
++        var name = req.Name?.Trim() ?? u.Name;
++        var surname = req.Surname?.Trim() ?? u.Surname;
++        if (name.Length == 0 || name.Length > 50 || !PersonName.IsMatch(name)) fields["name"] = "Enter a name (letters, max 50 characters)";
++        if (surname.Length == 0 || surname.Length > 50 || !PersonName.IsMatch(surname)) fields["surname"] = "Enter a surname (letters, max 50 characters)";
++        if (fields.Count > 0) return Err(400, "Please correct the highlighted fields", fields);
++        u.Name = name; u.Surname = surname;
++        if (req.EmailNotifications is bool en) u.EmailNotifications = en;
++        await core.SaveChangesAsync();
++        return Results.Ok(UserDto(u));
++    }
++
++    static async Task<IResult> ChangePassword(PasswordReq req, HttpContext http, CoreDb core, LoginThrottle throttle)
++    {
++        var me = Security.Current(http);
++        if (me == null) return Unauth();
++        var key = $"pw|{me.Id}";
++        if (throttle.IsBlocked(key, 8, out var wait))
++        {
++            http.Response.Headers["Retry-After"] = wait.ToString();
++            return Err(429, $"Too many failed attempts. Please try again in {wait} seconds.");
++        }
++        var u = await core.Users.FindAsync(me.Id);
++        if (u == null) return Unauth();
++        var current = req.CurrentPassword ?? "";
++        if (current.Length == 0 || current.Length > 128 || !Security.Verify(current, u.PasswordHash))
++        {
++            throttle.Fail(key);
++            return Err(400, "Please correct the highlighted fields", new { currentPassword = "Current password is not correct" });
++        }
++        var fields = new Dictionary<string, string>();
++        var problem = Security.PasswordProblem(req.NewPassword);
++        if (problem != null) fields["newPassword"] = problem;
++        else if (req.NewPassword == current) fields["newPassword"] = "The new password must be different from the current one";
++        if (req.NewPassword != req.ConfirmPassword) fields["confirmPassword"] = "Passwords do not match";
++        if (fields.Count > 0) return Err(400, "Please correct the highlighted fields", fields);
++
++        throttle.Reset(key);
++        u.PasswordHash = Security.Hash(req.NewPassword!);
++        await core.SaveChangesAsync();
++        // log out every OTHER device: a stolen session must not survive a password change
++        var token = http.Request.Cookies[Security.CookieName];
++        var keep = string.IsNullOrEmpty(token) ? "" : Security.TokenHash(token);
++        await core.UserSessions.Where(x => x.UserId == u.Id && x.TokenHash != keep).ExecuteDeleteAsync();
++        return Results.Ok(new { ok = true });
++    }
++
++    // ---------- reports (administrators only) ----------
++    static async Task<IResult> Reports(int? days, HttpContext http, CoreDb core, OpsDb ops, IOptions<LemsOptions> opt)
++    {
++        var me = Security.Current(http);
++        if (me == null) return Unauth();
++        if (me.Role != Role.ADMIN) return Forbidden();
++        var n = Math.Clamp(days ?? 30, 7, 365);
++        var since = DateTime.Today.AddDays(-(n - 1));
++        var until = DateTime.Today.AddDays(1);
++
++        var bookings = await ops.Bookings.Where(b => b.StartTime >= since && b.StartTime < until)
++            .Select(b => new { b.EquipmentId, b.StartTime, b.Status }).ToListAsync();
++        bool Used(BookingStatus s) => s == BookingStatus.CONFIRMED || s == BookingStatus.IN_PROGRESS || s == BookingStatus.FINISHED;
++        var used = bookings.Where(b => Used(b.Status)).ToList();
++
++        var equipment = await core.Equipment.OrderBy(e => e.Title).ToListAsync();
++        var capacityPerEquipment = n * Math.Max(1, opt.Value.CloseHour - opt.Value.OpenHour);   // bookable hours in the period
++        var utilization = equipment.Select(e =>
++        {
++            var hours = used.Count(b => b.EquipmentId == e.Id);   // every booking is one hour
++            return new { id = e.Id, inventoryNumber = e.InventoryNumber, title = e.Title, usedHours = hours, percent = Math.Round(hours * 100.0 / capacityPerEquipment, 1) };
++        }).OrderByDescending(x => x.usedHours).ThenBy(x => x.title).ToList();
++
++        var perDay = Enumerable.Range(0, n).Select(i =>
++        {
++            var day = since.AddDays(i);
++            var ofDay = bookings.Where(b => b.StartTime.Date == day).ToList();
++            return new { date = day.ToString("yyyy-MM-dd"), total = ofDay.Count, used = ofDay.Count(b => Used(b.Status)) };
++        }).ToList();
++
++        var byStatus = bookings.GroupBy(b => b.Status).Select(g => new { status = g.Key, count = g.Count() }).OrderByDescending(x => x.count).ToList();
++
++        var repairs = await ops.RepairRequests.Where(r => r.CreatedAt >= since).Select(r => new { r.EquipmentId, r.Confirmed, r.CreatedAt }).ToListAsync();
++        var eqById = equipment.ToDictionary(e => e.Id);
++        var faults = repairs.GroupBy(r => r.EquipmentId).Where(g => eqById.ContainsKey(g.Key))
++            .Select(g => new
++            {
++                equipmentId = g.Key, inventoryNumber = eqById[g.Key].InventoryNumber, title = eqById[g.Key].Title,
++                reports = g.Count(), confirmed = g.Count(x => x.Confirmed), lastReport = g.Max(x => x.CreatedAt)
++            }).OrderByDescending(x => x.reports).ThenByDescending(x => x.lastReport).Take(10).ToList();
++
++        var totalHours = used.Count;
++        var totalCapacity = capacityPerEquipment * Math.Max(1, equipment.Count);
++        return Results.Ok(new
++        {
++            days = n, fromDate = since.ToString("yyyy-MM-dd"), toDate = until.AddDays(-1).ToString("yyyy-MM-dd"),
++            totals = new
++            {
++                bookings = bookings.Count, usedHours = totalHours, repairs = repairs.Count,
++                confirmedRepairs = repairs.Count(r => r.Confirmed),
++                utilizationPercent = equipment.Count == 0 ? 0 : Math.Round(totalHours * 100.0 / totalCapacity, 1)
++            },
++            perDay, byStatus, utilization, faults
++        });
++    }
++
+     // ---------- notifications (Ops) ----------
+-    static async Task<IResult> ListNotifications(HttpContext http, OpsDb ops)
++    static async Task<IResult> ListNotifications(HttpContext http, OpsDb ops, int? page, int? pageSize)
+     {
+         var me = Security.Current(http);
+         if (me == null) return Unauth();
++        var size = Math.Clamp(pageSize ?? 30, 1, 100);
++        var pg = Math.Max(1, page ?? 1);
++        var total = await ops.Notifications.CountAsync(n => n.UserId == me.Id);
+         var items = await ops.Notifications.Where(n => n.UserId == me.Id).OrderByDescending(n => n.CreatedAt).ThenByDescending(n => n.Id)
+-            .Take(30).Select(n => new { n.Id, n.Message, isRead = n.IsRead, createdAt = n.CreatedAt }).ToListAsync();
++            .Skip((pg - 1) * size).Take(size).Select(n => new { n.Id, n.Message, isRead = n.IsRead, createdAt = n.CreatedAt }).ToListAsync();
+         var unread = await ops.Notifications.CountAsync(n => n.UserId == me.Id && !n.IsRead);
+-        return Results.Ok(new { unread, items });
++        return Results.Ok(new { unread, total, page = pg, pageSize = size, items });
+     }
+ 
+     static async Task<IResult> ReadAll(HttpContext http, OpsDb ops)
+diff --git a/backend/Lems.csproj b/backend/Lems.csproj
+index b718acb..cf16082 100644
+--- a/backend/Lems.csproj
++++ b/backend/Lems.csproj
+@@ -10,5 +10,6 @@
+     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.10" />
+     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.10" />
+     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.10" />
++    <PackageReference Include="MailKit" Version="4.8.0" />
+   </ItemGroup>
+ </Project>
+diff --git a/backend/Models.cs b/backend/Models.cs
+index e514afc..18b9c21 100644
+--- a/backend/Models.cs
++++ b/backend/Models.cs
+@@ -21,6 +21,7 @@ public class User
+     [MaxLength(100)] public string Email { get; set; } = "";
+     [MaxLength(255)] public string PasswordHash { get; set; } = "";
+     public Role Role { get; set; }
++    public bool EmailNotifications { get; set; } = true;   // e-mail copies of booking notifications
+     public DateTime CreatedAt { get; set; } = DateTime.Now;
+ }
+ 
+@@ -32,6 +33,9 @@ public class Equipment
+     [MaxLength(250)] public string Description { get; set; } = "";
+     [MaxLength(20)] public string Location { get; set; } = "";
+     [MaxLength(30)] public string Category { get; set; } = "";
++    [MaxLength(1000)] public string Specifications { get; set; } = "";   // technical data shown in the info dialog
++    [MaxLength(50)] public string ContactName { get; set; } = "";        // person responsible for the equipment
++    [MaxLength(100)] public string ContactEmail { get; set; } = "";
+     public EquipmentStatus Status { get; set; } = EquipmentStatus.AVAILABLE;
+     public DateTime CreatedAt { get; set; } = DateTime.Now;
+ }
+diff --git a/backend/Program.cs b/backend/Program.cs
+index 0b1e2e6..0e75e82 100644
+--- a/backend/Program.cs
++++ b/backend/Program.cs
+@@ -31,6 +31,11 @@ builder.Services.AddHttpClient("ai", c =>
+     c.BaseAddress = new Uri(builder.Configuration["AiService:BaseUrl"] ?? "http://127.0.0.1:8000");
+     c.Timeout = TimeSpan.FromSeconds(90);   // provider timeout is 60 s plus search (API_CONTRACT.md)
+ });
++// E-mail (MailKit/SMTP). Without Smtp:Host the channel is off and everything else works as before.
++builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection("Smtp"));
++builder.Services.AddSingleton<MailQueue>();
++builder.Services.AddSingleton<IMailQueue>(sp => sp.GetRequiredService<MailQueue>());
++builder.Services.AddHostedService<MailWorker>();
+ builder.Services.AddHostedService<LifecycleWorker>();
+ 
+ // The web UI is a separate container (frontend/, nginx) that proxies /api to this service. Behind that proxy the
+@@ -55,6 +60,7 @@ using (var scope = app.Services.CreateScope())
+     var ops = scope.ServiceProvider.GetRequiredService<OpsDb>();
+     core.Database.EnsureCreated();
+     ops.Database.EnsureCreated();
++    SchemaUpgrade.Core(core, app.Logger);   // adds columns introduced after the first release to existing databases
+     // No migrations yet: EnsureCreated only builds a NEW database. Fail early with a clear message if an older one is in use.
+     try { _ = core.EquipmentImages.Any(); _ = core.UserSessions.Any(); _ = ops.Notifications.Any(); }
+     catch (Exception ex)
+diff --git a/backend/Services/Domain.cs b/backend/Services/Domain.cs
+index d5980d7..b72eb8b 100644
+--- a/backend/Services/Domain.cs
++++ b/backend/Services/Domain.cs
+@@ -19,8 +19,11 @@ public class LemsOptions
+ ///   4. LifecycleWorker reconciles anything a crash left behind.
+ /// Methods only stage changes in 'ops'; callers call ops.SaveChangesAsync(). Core saves happen inside where noted.
+ /// </summary>
+-public class Domain(CoreDb core, OpsDb ops)
++public class Domain(CoreDb core, OpsDb ops, IMailQueue? mail = null)
+ {
++    // E-mails are staged while a change is prepared and sent to the queue only AFTER the database save succeeded (FlushMail).
++    readonly List<MailItem> outbox = new();
++
+     public static string Eq(Equipment e) => $"Equipment {e.Title} (Inventory No.: {e.InventoryNumber}) at {e.Location}";
+     public static string When(Booking b) => $"{b.StartTime:dd.MM.yyyy HH:mm}-{b.EndTime:HH:mm}";
+ 
+@@ -33,6 +36,33 @@ public class Domain(CoreDb core, OpsDb ops)
+         foreach (var id in ids) Notify(id, message);
+     }
+ 
++    async Task<User?> MailRecipient(int userId)
++    {
++        if (mail is not { Enabled: true }) return null;
++        var u = await core.Users.AsNoTracking().FirstOrDefaultAsync(x => x.Id == userId);
++        return u is { Role: Role.STUDENT, EmailNotifications: true } ? u : null;   // e-mails go to students who did not switch them off
++    }
++
++    /// <summary>Stages the e-mail for a booking event. wasConfirmed: the booking was CONFIRMED before (a calendar event exists to be removed).</summary>
++    public async Task StageBookingMail(Booking b, Equipment? e, MailKind kind, string? reason = null, bool wasConfirmed = false)
++    {
++        var u = await MailRecipient(b.UserId);
++        if (u != null) outbox.Add(MailTemplates.ForBooking(kind, b, e, u, reason, wasConfirmed, mail!.AppUrl));
++    }
++
++    /// <summary>Stages a simple text e-mail (repair report decisions).</summary>
++    public async Task StageTextMail(int userId, string subject, string message)
++    {
++        var u = await MailRecipient(userId);
++        if (u != null) outbox.Add(MailTemplates.Text(u, subject, message, mail!.AppUrl));
++    }
++
++    public void FlushMail()
++    {
++        if (mail != null) foreach (var m in outbox) mail.Enqueue(m);
++        outbox.Clear();
++    }
++
+     public void Activity(string message) =>
+         ops.Activity.Add(new ActivityEvent { Message = message, CreatedAt = DateTime.Now });
+ 
+@@ -45,8 +75,10 @@ public class Domain(CoreDb core, OpsDb ops)
+             .ToListAsync();
+         foreach (var b in list)
+         {
++            var was = b.Status;
+             b.Status = BookingStatus.CANCELED;
+             Notify(b.UserId, $"Your booking of {e.Title} ({When(b)}) has been canceled: {reason}");
++            await StageBookingMail(b, e, MailKind.Canceled, reason, was == BookingStatus.CONFIRMED);
+         }
+         return list.Count;
+     }
+diff --git a/backend/Services/Mail.cs b/backend/Services/Mail.cs
+new file mode 100644
+index 0000000..0d9c482
+--- /dev/null
++++ b/backend/Services/Mail.cs
+@@ -0,0 +1,204 @@
++using System.Globalization;
++using System.Net;
++using System.Text;
++using System.Threading.Channels;
++using MailKit.Net.Smtp;
++using MailKit.Security;
++using Microsoft.Extensions.Options;
++using MimeKit;
++
++namespace Lems;
++
++/// <summary>SMTP settings (env vars Smtp__Host, Smtp__Port, Smtp__User, Smtp__Password, Smtp__From, Smtp__PublicUrl).
++/// With an empty Host the e-mail channel is simply switched off.</summary>
++public class SmtpOptions
++{
++    public string Host { get; set; } = "";
++    public int Port { get; set; } = 587;
++    public string User { get; set; } = "";
++    public string Password { get; set; } = "";
++    public string From { get; set; } = "LEMS <no-reply@lems.local>";
++    /// <summary>Public address of the web UI, used for the "Open LEMS" link in e-mails (optional).</summary>
++    public string PublicUrl { get; set; } = "";
++}
++
++public enum MailKind { Received, Confirmed, Rejected, Canceled }
++
++/// <summary>One outgoing message. Ics (optional) is sent as a text/calendar attachment with IcsMethod PUBLISH or CANCEL.</summary>
++public record MailItem(string To, string Subject, string Text, string Html, string? Ics = null, string? IcsMethod = null, string? IcsName = null);
++
++public interface IMailQueue
++{
++    bool Enabled { get; }
++    string AppUrl { get; }
++    void Enqueue(MailItem item);
++}
++
++/// <summary>In-memory queue. Sending happens in MailWorker, so a slow or broken SMTP server never slows down or breaks a booking.</summary>
++public class MailQueue(IOptions<SmtpOptions> opt) : IMailQueue
++{
++    readonly Channel<MailItem> channel = Channel.CreateBounded<MailItem>(new BoundedChannelOptions(500) { FullMode = BoundedChannelFullMode.DropWrite });
++    public bool Enabled => !string.IsNullOrWhiteSpace(opt.Value.Host);
++    public string AppUrl => opt.Value.PublicUrl?.Trim() ?? "";
++    public ChannelReader<MailItem> Reader => channel.Reader;
++    public void Enqueue(MailItem item) { if (Enabled) channel.Writer.TryWrite(item); }
++}
++
++/// <summary>Background sender (MailKit). Two attempts per message; a failure is only logged.</summary>
++public class MailWorker(MailQueue queue, IOptions<SmtpOptions> opt, ILogger<MailWorker> log) : BackgroundService
++{
++    protected override async Task ExecuteAsync(CancellationToken ct)
++    {
++        try
++        {
++            await foreach (var item in queue.Reader.ReadAllAsync(ct))
++            {
++                for (var attempt = 1; attempt <= 2; attempt++)
++                {
++                    try { await Send(item, ct); break; }
++                    catch (Exception ex) when (ex is not OperationCanceledException)
++                    {
++                        if (attempt == 2) log.LogError("E-mail to {To} could not be sent: {Msg}", item.To, ex.Message);
++                        else { log.LogWarning("E-mail to {To} failed ({Msg}), retrying", item.To, ex.Message); await Task.Delay(TimeSpan.FromSeconds(5), ct); }
++                    }
++                }
++            }
++        }
++        catch (OperationCanceledException) { /* shutting down */ }
++    }
++
++    async Task Send(MailItem item, CancellationToken ct)
++    {
++        var o = opt.Value;
++        var msg = new MimeMessage();
++        msg.From.Add(MailboxAddress.Parse(o.From));
++        msg.To.Add(MailboxAddress.Parse(item.To));
++        msg.Subject = item.Subject;
++        var body = new BodyBuilder { TextBody = item.Text, HtmlBody = item.Html };
++        if (item.Ics != null)
++            body.Attachments.Add(item.IcsName ?? "booking.ics", Encoding.UTF8.GetBytes(item.Ics),
++                ContentType.Parse($"text/calendar; charset=utf-8; method={item.IcsMethod ?? "PUBLISH"}"));
++        msg.Body = body.ToMessageBody();
++
++        using var client = new SmtpClient();
++        await client.ConnectAsync(o.Host, o.Port, SecureSocketOptions.Auto, ct);   // Auto: 465 = SSL, 587 = STARTTLS
++        if (!string.IsNullOrWhiteSpace(o.User)) await client.AuthenticateAsync(o.User, o.Password, ct);
++        await client.SendAsync(msg, ct);
++        await client.DisconnectAsync(true, ct);
++    }
++}
++
++/// <summary>iCalendar (.ics) events. Times are the lab's wall-clock times, written as "floating" local time, which every calendar app shows as-is.</summary>
++public static class Ics
++{
++    static string Esc(string s) => s.Replace("\\", "\\\\").Replace(";", "\\;").Replace(",", "\\,").Replace("\r\n", "\\n").Replace("\n", "\\n");
++
++    /// <summary>RFC 5545: lines are folded at 75 octets.</summary>
++    static string Fold(string line)
++    {
++        var sb = new StringBuilder(); var octets = 0;
++        foreach (var r in line.EnumerateRunes())
++        {
++            var n = r.Utf8SequenceLength;
++            if (octets + n > 74) { sb.Append("\r\n "); octets = 1; }
++            sb.Append(r.ToString()); octets += n;
++        }
++        return sb.ToString();
++    }
++
++    static string Stamp(DateTime t) => t.ToString("yyyyMMdd'T'HHmmss", CultureInfo.InvariantCulture);
++
++    /// <param name="method">PUBLISH (confirmed booking) or CANCEL (removes the event again: same UID, higher SEQUENCE)</param>
++    public static string Event(Booking b, string title, string location, string method)
++    {
++        var cancel = method == "CANCEL";
++        var lines = new List<string>
++        {
++            "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//LEMS//Booking//EN", "CALSCALE:GREGORIAN", $"METHOD:{method}",
++            "BEGIN:VEVENT",
++            $"UID:booking-{b.Id}@lems",
++            $"DTSTAMP:{DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture)}",
++            $"DTSTART:{Stamp(b.StartTime)}",
++            $"DTEND:{Stamp(b.EndTime)}",
++            $"SUMMARY:{Esc("LEMS: " + title)}",
++            $"LOCATION:{Esc(location)}",
++            $"DESCRIPTION:{Esc(b.Description ?? "")}",
++            $"STATUS:{(cancel ? "CANCELLED" : "CONFIRMED")}",
++            $"SEQUENCE:{(cancel ? 1 : 0)}",
++            "END:VEVENT", "END:VCALENDAR"
++        };
++        return string.Join("\r\n", lines.Select(Fold)) + "\r\n";
++    }
++
++    /// <summary>Plain link that pre-fills a Google Calendar event (no OAuth, no API).</summary>
++    public static string GoogleLink(Booking b, string title, string location) =>
++        "https://calendar.google.com/calendar/render?action=TEMPLATE" +
++        $"&text={Uri.EscapeDataString("LEMS: " + title)}&dates={Stamp(b.StartTime)}/{Stamp(b.EndTime)}" +
++        $"&details={Uri.EscapeDataString(b.Description ?? "")}&location={Uri.EscapeDataString(location)}";
++}
++
++/// <summary>Texts of the e-mails (plain text + small HTML version).</summary>
++public static class MailTemplates
++{
++    static string H(string s) => WebUtility.HtmlEncode(s);
++
++    static MailItem Build(string to, string subject, string greeting, IEnumerable<string> paragraphs, IEnumerable<(string Label, string Value)> details,
++        string appUrl, string? link, string? linkText, string? ics, string? method, string? icsName)
++    {
++        var paras = paragraphs.ToList(); var det = details.ToList();
++        var text = new StringBuilder(greeting + "\n\n");
++        foreach (var p in paras) text.Append(p + "\n\n");
++        foreach (var (l, v) in det) text.Append($"{l}: {v}\n");
++        if (link != null) text.Append($"\n{linkText}: {link}\n");
++        if (appUrl.Length > 0) text.Append($"\nOpen LEMS: {appUrl}\n");
++        text.Append("\n--\nYou receive this message because e-mail notifications are enabled in your LEMS profile.\n");
++
++        var html = new StringBuilder("<div style=\"font-family:Arial,sans-serif;font-size:14px;color:#1C1C1E;max-width:560px\">");
++        html.Append($"<p style=\"font-weight:700;font-size:16px;margin:0 0 14px\">LEMS<span style=\"color:#4F46E5\">.</span></p><p>{H(greeting)}</p>");
++        foreach (var p in paras) html.Append($"<p>{H(p)}</p>");
++        html.Append("<table style=\"border-collapse:collapse;margin:12px 0\">");
++        foreach (var (l, v) in det) html.Append($"<tr><td style=\"padding:3px 14px 3px 0;color:#8A8A93\">{H(l)}</td><td style=\"padding:3px 0\">{H(v)}</td></tr>");
++        html.Append("</table>");
++        if (link != null) html.Append($"<p><a href=\"{H(link)}\" style=\"background:#4F46E5;color:#fff;padding:8px 14px;border-radius:7px;text-decoration:none\">{H(linkText ?? "Open")}</a></p>");
++        if (appUrl.Length > 0) html.Append($"<p><a href=\"{H(appUrl)}\">Open LEMS</a></p>");
++        html.Append("<p style=\"color:#8A8A93;font-size:12px\">You receive this message because e-mail notifications are enabled in your LEMS profile.</p></div>");
++        return new MailItem(to, subject, text.ToString(), html.ToString(), ics, method, icsName);
++    }
++
++    public static MailItem ForBooking(MailKind kind, Booking b, Equipment? e, User u, string? reason, bool wasConfirmed, string appUrl)
++    {
++        var title = e?.Title ?? "the equipment"; var loc = e?.Location ?? "";
++        var details = new List<(string, string)>
++        {
++            ("Equipment", e == null ? title : $"{e.Title} (Inventory No.: {e.InventoryNumber})"),
++            ("Location", loc.Length > 0 ? loc : "-"),
++            ("Date and time", $"{b.StartTime:dd.MM.yyyy HH:mm}-{b.EndTime:HH:mm}"),
++            ("Purpose", b.Description ?? "")
++        };
++        var greeting = $"Hello {u.Name},";
++        switch (kind)
++        {
++            case MailKind.Received:
++                return Build(u.Email, $"LEMS: booking request received - {title}", greeting,
++                    new[] { "Your booking request has been received and is waiting for an administrator's decision. The time slot is held for you. You will get another e-mail as soon as it is confirmed or rejected." },
++                    details, appUrl, null, null, null, null, null);
++            case MailKind.Confirmed:
++                return Build(u.Email, $"LEMS: booking confirmed - {title}", greeting,
++                    new[] { "Your booking has been confirmed. The attached calendar file (.ics) works with Google Calendar, Outlook and Apple Calendar." },
++                    details, appUrl, Ics.GoogleLink(b, title, loc), "Add to Google Calendar",
++                    Ics.Event(b, title, loc, "PUBLISH"), "PUBLISH", $"booking-{b.Id}.ics");
++            case MailKind.Rejected:
++                return Build(u.Email, $"LEMS: booking rejected - {title}", greeting,
++                    new[] { "Unfortunately your booking request has been rejected by an administrator. The time slot is free again - you can book another one." },
++                    details, appUrl, null, null, null, null, null);
++            default:
++                return Build(u.Email, $"LEMS: booking canceled - {title}", greeting,
++                    new[] { reason is { Length: > 0 } ? $"Your booking has been canceled: {reason}." : "Your booking has been canceled." + (wasConfirmed ? " The attached file removes the event from your calendar." : "") },
++                    details, appUrl, null, null,
++                    wasConfirmed ? Ics.Event(b, title, loc, "CANCEL") : null, wasConfirmed ? "CANCEL" : null, wasConfirmed ? $"booking-{b.Id}.ics" : null);
++        }
++    }
++
++    public static MailItem Text(User u, string subject, string message, string appUrl) =>
++        Build(u.Email, subject, $"Hello {u.Name},", new[] { message }, Array.Empty<(string, string)>(), appUrl, null, null, null, null, null);
++}
+diff --git a/backend/Services/SchemaUpgrade.cs b/backend/Services/SchemaUpgrade.cs
+new file mode 100644
+index 0000000..151ef23
+--- /dev/null
++++ b/backend/Services/SchemaUpgrade.cs
+@@ -0,0 +1,55 @@
++using Microsoft.EntityFrameworkCore;
++
++namespace Lems;
++
++/// <summary>
++/// The project has no EF migrations: EnsureCreated builds a NEW database only. Columns that were added after the first
++/// release are added here to databases that already exist. Every statement is idempotent (safe to run on every start).
++/// Only the CORE database changed (OPS has no new columns).
++/// </summary>
++public static class SchemaUpgrade
++{
++    // (table, column, SQL Server type, Postgres type, SQLite type, default literal)
++    static readonly (string Table, string Column, string SqlServer, string Postgres, string Sqlite, string Default)[] Columns =
++    {
++        ("Equipment", "specifications", "nvarchar(1000)", "varchar(1000)", "TEXT", "''"),
++        ("Equipment", "contact_name", "nvarchar(50)", "varchar(50)", "TEXT", "''"),
++        ("Equipment", "contact_email", "nvarchar(100)", "varchar(100)", "TEXT", "''"),
++        ("Users", "email_notifications", "bit", "boolean", "INTEGER", "1"),
++    };
++
++    public static void Core(CoreDb core, ILogger log)
++    {
++        var provider = core.Database.ProviderName ?? "";
++        foreach (var c in Columns)
++        {
++            try
++            {
++                if (provider.Contains("SqlServer"))
++                    core.Database.ExecuteSqlRaw($"IF COL_LENGTH('{c.Table}', '{c.Column}') IS NULL ALTER TABLE [{c.Table}] ADD [{c.Column}] {c.SqlServer} NOT NULL CONSTRAINT [DF_{c.Table}_{c.Column}] DEFAULT {c.Default}");
++                else if (provider.Contains("Npgsql"))
++                    core.Database.ExecuteSqlRaw($"ALTER TABLE \"{c.Table}\" ADD COLUMN IF NOT EXISTS \"{c.Column}\" {c.Postgres} NOT NULL DEFAULT {c.Default}");
++                else if (provider.Contains("Sqlite") && !SqliteHasColumn(core, c.Table, c.Column))
++                    core.Database.ExecuteSqlRaw($"ALTER TABLE \"{c.Table}\" ADD COLUMN \"{c.Column}\" {c.Sqlite} NOT NULL DEFAULT {c.Default}");
++            }
++            catch (Exception ex)
++            {
++                log.LogWarning("Schema upgrade of {Table}.{Column} failed: {Msg}", c.Table, c.Column, ex.Message);
++            }
++        }
++    }
++
++    static bool SqliteHasColumn(CoreDb core, string table, string column)
++    {
++        var conn = core.Database.GetDbConnection();
++        var wasClosed = conn.State != System.Data.ConnectionState.Open;
++        if (wasClosed) conn.Open();
++        try
++        {
++            using var cmd = conn.CreateCommand();
++            cmd.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = '{column}'";   // constants only, no user input
++            return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
++        }
++        finally { if (wasClosed) conn.Close(); }
++    }
++}
+diff --git a/backend/Services/Workers.cs b/backend/Services/Workers.cs
+index 95a728b..c6dde88 100644
+--- a/backend/Services/Workers.cs
++++ b/backend/Services/Workers.cs
+@@ -63,7 +63,7 @@ public class AiClient(IHttpClientFactory factory, IConfiguration cfg, ILogger<Ai
+ 
+ /// <summary>Background worker: booking lifecycle (BR-BK-11/13/15), equipment status sync, session purge and
+ /// cross-database reconciliation. Runs every 15 s; every step is idempotent.</summary>
+-public class LifecycleWorker(IServiceScopeFactory scopes, IOptions<LemsOptions> opt, IOptions<SecurityOptions> sec, ILogger<LifecycleWorker> log) : BackgroundService
++public class LifecycleWorker(IServiceScopeFactory scopes, IOptions<LemsOptions> opt, IOptions<SecurityOptions> sec, IMailQueue mail, ILogger<LifecycleWorker> log) : BackgroundService
+ {
+     protected override async Task ExecuteAsync(CancellationToken ct)
+     {
+@@ -86,7 +86,7 @@ public class LifecycleWorker(IServiceScopeFactory scopes, IOptions<LemsOptions>
+         using var scope = scopes.CreateScope();
+         var core = scope.ServiceProvider.GetRequiredService<CoreDb>();
+         var ops = scope.ServiceProvider.GetRequiredService<OpsDb>();
+-        var d = new Domain(core, ops);
++        var d = new Domain(core, ops, mail);
+         var now = DateTime.Now;
+ 
+         // 0. purge expired login sessions (Core)
+@@ -105,8 +105,10 @@ public class LifecycleWorker(IServiceScopeFactory scopes, IOptions<LemsOptions>
+                 b.Status = BookingStatus.CANCELED;
+                 var title = eq.TryGetValue(b.EquipmentId, out var e) ? e.Title : "the equipment";
+                 d.Notify(b.UserId, $"Your booking request for {title} ({Domain.When(b)}) was canceled automatically because no decision was made in time.");
++                await d.StageBookingMail(b, e, MailKind.Canceled, "no decision was made in time", false);
+             }
+             await ops.SaveChangesAsync();
++            d.FlushMail();
+         }
+ 
+         // 2. IN_PROGRESS -> FINISHED (before starting new ones, so back-to-back bookings work)
+diff --git a/backend/appsettings.json b/backend/appsettings.json
+index 06a41bd..a7db026 100644
+--- a/backend/appsettings.json
++++ b/backend/appsettings.json
+@@ -25,6 +25,14 @@
+     "IdleMinutes": 480,
+     "AbsoluteHours": 24
+   },
++  "Smtp": {
++    "Host": "",
++    "Port": 587,
++    "User": "",
++    "Password": "",
++    "From": "LEMS <no-reply@lems.local>",
++    "PublicUrl": ""
++  },
+   "Seed": {
+     "AdminEmail": "",
+     "AdminPassword": ""
+diff --git a/frontend/app.js b/frontend/app.js
+index 164ac21..f1b498d 100644
+--- a/frontend/app.js
++++ b/frontend/app.js
+@@ -110,17 +110,26 @@ const ICON = {
+   check: svg('<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>'),
+   clock: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+   list: svg('<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>'),
+-  pulse: svg('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>')
++  pulse: svg('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>'),
++  calendar: svg('<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M8 14h2M14 14h2M8 17.5h2"/>'),
++  notifications: svg('<path d="M6 9a6 6 0 0112 0c0 6 2 7 2 7H4s2-1 2-7"/><path d="M10 20a2 2 0 004 0"/>'),
++  profile: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/>'),
++  reports: svg('<path d="M3 3v18h18"/><path d="M8 17v-5M13 17V7M18 17v-8"/>'),
++  help: svg('<circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 015.8 1c0 2-3 2.5-3 4M12 17h.01"/>'),
++  info: svg('<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>')
+ };
+ const NAV = () => isAdmin()
+-  ? [['Main', [['dashboard', 'Dashboard'], ['equipment', 'Equipment'], ['bookings', 'Bookings']]], ['Admin', [['inventory', 'Inventory'], ['repairs', 'Repair Requests'], ['students', 'Students']]]]
+-  : [['Main', [['dashboard', 'Dashboard'], ['equipment', 'Equipment'], ['bookings', 'My Bookings'], ['repairs', 'Report Issue']]]];
++  ? [['Main', [['dashboard', 'Dashboard'], ['equipment', 'Equipment'], ['calendar', 'Calendar'], ['bookings', 'Bookings']]],
++     ['Admin', [['inventory', 'Inventory'], ['repairs', 'Repair Requests'], ['students', 'Students'], ['reports', 'Reports']]],
++     ['Account', [['notifications', 'Notifications'], ['profile', 'Profile']]]]
++  : [['Main', [['dashboard', 'Dashboard'], ['equipment', 'Equipment'], ['calendar', 'Calendar'], ['bookings', 'My Bookings'], ['repairs', 'Report Issue']]],
++     ['Account', [['notifications', 'Notifications'], ['profile', 'Profile'], ['help', 'Rules & Help']]]];
+ const NAV_ICON = { repairs: () => isAdmin() ? ICON.repairs : ICON.report };
+ 
+ function shell(page) {
+   const ini = (user.name[0] + user.surname[0]).toUpperCase();
+   const role = isAdmin() ? 'Administrator' : 'Student';
+-  const link = ([k, t]) => `<a href="#/${k}" class="${k === page ? 'active' : ''}">${(NAV_ICON[k] ? NAV_ICON[k]() : ICON[k])}<span>${t}</span></a>`;
++  const link = ([k, t]) => `<a href="#/${k}" class="${k === page ? 'active' : ''}">${(NAV_ICON[k] ? NAV_ICON[k]() : ICON[k])}<span>${esc(t)}</span></a>`;
+   $app.innerHTML = `<div class="shell">
+     <aside class="side" id="side">
+       <a class="brand" href="#/dashboard"><img class="logo" src="logo.svg?v=5" alt=""><b>LEMS<i>.</i></b></a>
+@@ -165,6 +174,7 @@ async function loadNotes(markRead) {
+     document.getElementById('notes').innerHTML = d.items.length
+       ? d.items.map(n => `<div class="it note ${n.isRead ? '' : 'unread'}">${esc(n.message)}<small>${fmt(n.createdAt)}</small></div>`).join('')
+       : '<div class="it empty">No notifications</div>';
++    document.getElementById('notes').insertAdjacentHTML('beforeend', '<div class="it"><a href="#/notifications">View all notifications</a></div>');
+     if (markRead && d.unread) { await api('/notifications/read-all', 'POST'); b.hidden = true; }
+   } catch { }
+ }
+@@ -172,12 +182,12 @@ async function loadNotes(markRead) {
+ 
+ 
+ /* ---------- router ---------- */
+-const ADMIN_ONLY = ['inventory', 'students'];
++const ADMIN_ONLY = ['inventory', 'students', 'reports'], STUDENT_ONLY = ['help'];
+ async function route() {
+   if (!user) { try { user = await api('/auth/me'); } catch { if (!$app.querySelector('.auth')) showAuth('login'); return; } }
+-  const pages = { dashboard, equipment, bookings, repairs, inventory, students };
++  const pages = { dashboard, equipment, calendar, bookings, repairs, inventory, students, reports, notifications, profile, help };
+   let page = (location.hash.replace('#/', '') || 'dashboard').split('?')[0];
+-  if (!pages[page] || (ADMIN_ONLY.includes(page) && !isAdmin())) page = 'dashboard';
++  if (!pages[page] || (ADMIN_ONLY.includes(page) && !isAdmin()) || (STUDENT_ONLY.includes(page) && isAdmin())) page = 'dashboard';
+   clearTimers(); shell(page);
+   const view = document.getElementById('view');
+   view.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
+@@ -199,7 +209,7 @@ async function dashboard(view) {
+     const rows = sc.equipment, hours = rows[0]?.slots.map(s => s.hour) ?? [];
+     const eq = d.equipment, pct = eq.total ? Math.round(eq.available * 100 / eq.total) : 0;
+     const bookedSlots = rows.reduce((n, r) => n + r.slots.filter(s => s.state === 'taken' || s.state === 'mine').length, 0);
+-    const today = ymd(new Date()), last = addDays(today, BOOK_AHEAD_DAYS);
++    const today = ymd(new Date()), last = addDays(today, sc.maxDaysAhead ?? BOOK_AHEAD_DAYS);
+     const stat = (title, n, sub, cls, ico) => `<div class="card stat ${cls}"><div class="top-row"><span class="l">${title}</span><span class="chip">${ico}</span></div><div class="n">${n}</div><div class="d ${cls}">${sub}</div></div>`;
+ 
+     /* schedule: first 5 pieces of equipment, the rest behind a button */
+@@ -301,7 +311,7 @@ async function equipment(view) {
+     const byId = Object.fromEntries(d.items.map(e => [e.id, e]));
+     view.querySelectorAll('[data-act]').forEach(b => b.onclick = () => {
+       const e = byId[b.dataset.id];
+-      ({ book: () => bookModal(e, draw), report: () => reportModal(e), edit: () => equipmentForm(e, draw), del: () => deleteFlow(e, draw) })[b.dataset.act]();
++      ({ info: () => infoModal(e, draw), book: () => bookModal(e, draw), report: () => reportModal(e), edit: () => equipmentForm(e, draw), del: () => deleteFlow(e, draw) })[b.dataset.act]();
+     });
+   };
+   await draw();
+@@ -339,7 +349,7 @@ function card(e) {
+     : `<button class="btn primary" data-act="book" data-id="${e.id}" ${maint ? 'disabled title="Equipment is under maintenance"' : ''}>Book</button><button class="btn" data-act="report" data-id="${e.id}">Report Issue</button>`;
+   return `<div class="card eq st-${e.status}"><div class="thumb">${thumb(e)}</div><h3>${esc(e.title)}</h3>
+     <div class="meta">Inv. No.: ${esc(e.inventoryNumber)}</div><div class="meta">${esc(e.location)} · ${esc(e.category)}</div>
+-    <div class="row">${badge(e.status)}</div><div class="acts">${acts}</div></div>`;
++    <div class="row">${badge(e.status)}<span class="grow"></span><button class="btn icon sm" data-act="info" data-id="${e.id}" aria-label="Details of ${esc(e.title)}" title="Details">${ICON.info}</button></div><div class="acts">${acts}</div></div>`;
+ }
+ 
+ /* opts.start: ISO start of a slot to pre-select (used by the dashboard schedule) */
+@@ -424,11 +434,13 @@ async function reportModal(e, refresh) {
+ 
+ 
+ function equipmentForm(e, refresh) {
+-  const v = e || { inventoryNumber: '', title: '', description: '', location: '', category: '', status: 'AVAILABLE' };
++  const v = e || { inventoryNumber: '', title: '', description: '', location: '', category: '', status: 'AVAILABLE', specifications: '', contactName: '', contactEmail: '' };
+   const f = (id, lbl, val, max) => `<label>${lbl}</label><input id="f-${id}" maxlength="${max}" value="${esc(val)}"><div id="e-${id}"></div>`;
+   modal(`<h2>${e ? 'Edit equipment' : 'Add equipment'}</h2>
+     ${f('inventoryNumber', 'Inventory number', v.inventoryNumber, 10)}${f('title', 'Title', v.title, 25)}${f('category', 'Category', v.category, 30)}${f('location', 'Location', v.location, 20)}
+     <label>Description</label><textarea id="f-description" rows="3" maxlength="250">${esc(v.description)}</textarea><div id="e-description"></div>
++    <label>Specifications (optional)</label><textarea id="f-specifications" rows="4" maxlength="1000" placeholder="One per line, e.g. Power: 230 V">${esc(v.specifications)}</textarea><div id="e-specifications"></div>
++    ${f('contactName', 'Responsible person (optional)', v.contactName, 50)}${f('contactEmail', 'Contact e-mail (optional)', v.contactEmail, 100)}
+     ${e ? `<label>Status</label>${v.status === 'RESERVED'
+       ? '<input value="Reserved (in use right now - managed automatically)" disabled>'
+       : `<select id="f-status"><option value="AVAILABLE" ${v.status === 'AVAILABLE' ? 'selected' : ''}>Available</option><option value="MAINTENANCE" ${v.status === 'MAINTENANCE' ? 'selected' : ''}>Maintenance (cancels pending & confirmed bookings)</option></select>`}` : ''}
+@@ -447,7 +459,7 @@ function equipmentForm(e, refresh) {
+     if (rm) rm.onclick = () => { removePhoto = true; m.querySelector('#f-photo').value = ''; m.querySelector('#prev').innerHTML = equipmentArt(v); rm.remove(); };
+     m.querySelector('#ok').onclick = async () => {
+       const g = id => m.querySelector('#f-' + id)?.value;
+-      const body = { inventoryNumber: g('inventoryNumber'), title: g('title'), category: g('category'), location: g('location'), description: g('description'), status: g('status') ?? v.status };
++      const body = { inventoryNumber: g('inventoryNumber'), title: g('title'), category: g('category'), location: g('location'), description: g('description'), specifications: g('specifications'), contactName: g('contactName'), contactEmail: g('contactEmail'), status: g('status') ?? v.status };
+       if (e && body.status === 'MAINTENANCE' && v.status !== 'MAINTENANCE' && !(await confirmBox('Place under maintenance?', 'All pending and confirmed bookings of this equipment will be canceled and students notified.', 'Continue', true))) return;
+       try {
+         const saved = await api(e ? `/equipment/${e.id}` : '/equipment', e ? 'PUT' : 'POST', body);
+@@ -460,7 +472,7 @@ function equipmentForm(e, refresh) {
+         close(); toast(photoError ? `Saved, but the photo failed: ${photoError}` : (e ? 'Equipment updated' : 'Equipment created'), !!photoError); refresh();
+       } catch (er) {
+         if (er.handled) return;   // form stays open with its data (BR-EQ-C-05)
+-        ['inventoryNumber', 'title', 'category', 'location', 'description'].forEach(k => m.querySelector('#e-' + k).innerHTML = fieldErr(er.fields, k));
++        ['inventoryNumber', 'title', 'category', 'location', 'description', 'specifications', 'contactName', 'contactEmail'].forEach(k => m.querySelector('#e-' + k).innerHTML = fieldErr(er.fields, k));
+         m.querySelector('#e-gen').innerHTML = Object.keys(er.fields).length ? '' : `<div class="alert">${esc(er.message)}</div>`;
+       }
+     };
+@@ -527,6 +539,14 @@ async function students(view) {
+   document.getElementById('sq').oninput = render; render();
+ }
+ 
++/* approve / reject / cancel a booking (used by the bookings page and the calendar) */
++async function bookingAction(a, id) {
++  if (a === 'cancel' && !(await confirmBox('Cancel booking?', 'The time slot will be released.', 'Cancel booking', true))) return false;
++  try { await api(`/bookings/${id}/${a}`, 'POST'); toast({ approve: 'Booking confirmed', reject: 'Booking rejected', cancel: 'Booking canceled' }[a]); }
++  catch (er) { if (!er.handled) toast(er.message, true); }
++  return true;
++}
++
+ /* ---------- bookings ---------- */
+ async function bookings(view) {
+   let filter = '';
+@@ -542,13 +562,7 @@ async function bookings(view) {
+         <td><div class="acts-cell">${b.canDecide ? `<button class="btn sm primary" data-a="approve" data-id="${b.id}">Approve</button><button class="btn sm danger" data-a="reject" data-id="${b.id}">Reject</button>` : ''}
+         ${b.canCancel ? `<button class="btn sm" data-a="cancel" data-id="${b.id}">Cancel</button>` : ''}</div></td></tr>`).join('')}</tbody></table>` : '<div class="empty"><b>No bookings</b>Nothing matches this filter.</div>'}</div>`;
+     document.getElementById('flt').onchange = e => { filter = e.target.value; draw(); };
+-    view.querySelectorAll('[data-a]').forEach(btn => btn.onclick = async () => {
+-      const a = btn.dataset.a;
+-      if (a === 'cancel' && !(await confirmBox('Cancel booking?', 'The time slot will be released.', 'Cancel booking', true))) return;
+-      try { await api(`/bookings/${btn.dataset.id}/${a}`, 'POST'); toast({ approve: 'Booking confirmed', reject: 'Booking rejected', cancel: 'Booking canceled' }[a]); }
+-      catch (er) { if (!er.handled) toast(er.message, true); }
+-      draw();
+-    });
++    view.querySelectorAll('[data-a]').forEach(btn => btn.onclick = async () => { await bookingAction(btn.dataset.a, btn.dataset.id); draw(); });
+   };
+   await draw(); timers.push(setInterval(() => { if (!document.querySelector('.ov')) draw().catch(() => { }); }, 15000));
+ }
+@@ -613,4 +627,185 @@ async function repairs(view) {
+ }
+ 
+ 
++
++/* ---------- equipment details dialog (description, specifications, responsible person) ---------- */
++function infoModal(e, refresh) {
++  const mail = e.contactEmail
++    ? `<a href="mailto:${esc(e.contactEmail)}?subject=${encodeURIComponent('Question about ' + e.inventoryNumber)}">${esc(e.contactName || e.contactEmail)}</a>${e.contactName ? `<small>${esc(e.contactEmail)}</small>` : ''}`
++    : (e.contactName ? esc(e.contactName) : '<span class="muted">Not specified</span>');
++  const row = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
++  modal(`<h2>${esc(e.title)}</h2><div class="kvhead">${badge(e.status)}<span class="sub" style="margin:0">Inventory No.: ${esc(e.inventoryNumber)}</span></div>
++    <div class="thumb info-thumb">${thumb(e)}</div>
++    <dl class="kv">${row('Description', e.description ? esc(e.description) : '<span class="muted">-</span>')}
++      ${row('Specifications', e.specifications ? `<div class="pre">${esc(e.specifications)}</div>` : '<span class="muted">Not specified</span>')}
++      ${row('Location', esc(e.location))}${row('Category', esc(e.category))}${row('Responsible', mail)}</dl>
++    <div class="foot"><button class="btn" id="cx">Close</button>
++      ${isAdmin() ? '' : `<button class="btn primary" id="bk" ${e.status === 'MAINTENANCE' ? 'disabled' : ''}>Book</button>`}</div>`, (m, close) => {
++    m.querySelector('#cx').onclick = close;
++    const bk = m.querySelector('#bk'); if (bk) bk.onclick = () => { close(); bookModal(e, refresh); };
++  });
++}
++
++/* ---------- calendar: week view ---------- */
++const CAL_FIRST = 8, CAL_LAST = 20;   // hours shown (the default lab hours)
++const mondayOf = iso => { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return ymd(d); };
++let calState = { week: mondayOf(ymd(new Date())), eq: '' };
++
++function bookingModal(b, onDone) {
++  const row = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
++  modal(`<h2>${esc(b.equipmentTitle)}</h2><div class="kvhead">${badge(b.status)}<span class="sub" style="margin:0">${esc(b.inventoryNumber)} · ${esc(b.location)}</span></div>
++    <dl class="kv">${row('When', `${fmt(b.start)}–${fmtT(b.end)}`)}${isAdmin() ? row('Student', `${esc(b.studentName)}<small>${esc(b.studentEmail)}</small>`) : ''}${row('Purpose', esc(b.description))}</dl>
++    <div class="foot"><button class="btn" id="cx">Close</button>
++      ${b.canCancel ? '<button class="btn danger" data-a="cancel">Cancel booking</button>' : ''}
++      ${b.canDecide ? '<button class="btn danger" data-a="reject">Reject</button><button class="btn primary" data-a="approve">Approve</button>' : ''}</div>`, (m, close) => {
++    m.querySelector('#cx').onclick = close;
++    m.querySelectorAll('[data-a]').forEach(btn => btn.onclick = async () => { close(); await bookingAction(btn.dataset.a, b.id); onDone(); });
++  });
++}
++
++async function calendar(view) {
++  const draw = async () => {
++    let list; try { list = await api('/bookings'); } catch (e) { if (!e.handled) loadFailed(view); return; }
++    list = list.filter(b => b.status !== 'REJECTED' && b.status !== 'CANCELED');
++    const eqs = [...new Map(list.map(b => [String(b.equipmentId), b.equipmentTitle]))].sort((a, b) => a[1].localeCompare(b[1]));
++    const days = Array.from({ length: 7 }, (_, i) => addDays(calState.week, i)), today = ymd(new Date());
++    const shown = list.filter(b => (!calState.eq || String(b.equipmentId) === calState.eq) && days.includes(b.start.slice(0, 10)));
++    const hours = Array.from({ length: CAL_LAST - CAL_FIRST }, (_, i) => CAL_FIRST + i);
++    const dayName = d => new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short' });
++    const range = `${new Date(days[0] + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} – ${new Date(days[6] + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`;
++    const cell = (d, h) => `<div class="cal-c ${d === today ? 'today' : ''}">${shown.filter(b => b.start.slice(0, 10) === d && Number(b.start.slice(11, 13)) === h)
++      .map(b => `<button class="chip s-${b.status.toLowerCase()}" data-b="${b.id}" title="${esc(b.equipmentTitle)} - ${label(b.status)}">${esc(b.equipmentTitle)}${isAdmin() ? `<small>${esc(b.studentName)}</small>` : ''}</button>`).join('')}</div>`;
++    view.innerHTML = `<div class="page-head"><div><h1>Calendar</h1><p class="sub">${isAdmin() ? 'Bookings of all equipment' : 'Your bookings'} · ${range}</p></div>
++      <div class="tools">${isAdmin() || eqs.length > 1 ? `<select id="cal-eq" style="width:200px"><option value="">All equipment</option>${eqs.map(([id, t]) => `<option value="${esc(id)}" ${calState.eq === id ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>` : ''}
++        <div class="datenav"><button class="btn icon" id="c-prev" aria-label="Previous week">${ICON.left}</button><button class="btn" id="c-today">Today</button><button class="btn icon" id="c-next" aria-label="Next week">${ICON.right}</button></div></div></div>
++      <div class="card"><div class="card-h"><div class="legend"><span><i class="l-pending"></i>Pending</span><span><i class="l-confirmed"></i>Confirmed</span><span><i class="l-in_progress"></i>In progress</span><span><i class="l-finished"></i>Finished</span></div>
++        <div class="right"><small>${shown.length} booking${shown.length === 1 ? '' : 's'} this week</small></div></div>
++        <div class="cal-scroll"><div class="cal"><div class="cal-h"></div>${days.map(d => `<div class="cal-h ${d === today ? 'today' : ''}"><span>${dayName(d)}</span><b>${Number(d.slice(8))}</b></div>`).join('')}
++          ${hours.map(h => `<div class="cal-t">${hh(h)}:00</div>${days.map(d => cell(d, h)).join('')}`).join('')}</div></div></div>`;
++    const go = w => { calState.week = w; draw(); };
++    document.getElementById('c-prev').onclick = () => go(addDays(calState.week, -7));
++    document.getElementById('c-next').onclick = () => go(addDays(calState.week, 7));
++    document.getElementById('c-today').onclick = () => go(mondayOf(today));
++    document.getElementById('cal-eq')?.addEventListener('change', ev => { calState.eq = ev.target.value; draw(); });
++    const byId = Object.fromEntries(shown.map(b => [b.id, b]));
++    view.querySelectorAll('[data-b]').forEach(c => c.onclick = () => bookingModal(byId[c.dataset.b], draw));
++  };
++  await draw(); timers.push(setInterval(() => { if (!document.querySelector('.ov')) draw().catch(() => { }); }, 20000));
++}
++
++/* ---------- notifications: full history ---------- */
++let notesPage = 1;
++async function notifications(view) {
++  const draw = async () => {
++    let d; try { d = await api(`/notifications?page=${notesPage}&pageSize=15`); } catch (e) { if (!e.handled) loadFailed(view); return; }
++    const pages = Math.max(1, Math.ceil(d.total / d.pageSize));
++    view.innerHTML = `<div class="page-head"><div><h1>Notifications</h1><p class="sub">${d.total} message${d.total === 1 ? '' : 's'}, ${d.unread} unread.${isAdmin() ? '' : (user.emailNotifications ? ' A copy of booking messages is also sent to your e-mail.' : ' E-mail copies are switched off in your profile.')}</p></div>
++      <div class="tools"><button class="btn" id="read-all" ${d.unread ? '' : 'disabled'}>Mark all as read</button></div></div>
++      <div class="card">${d.items.length ? d.items.map(n => `<div class="nrow ${n.isRead ? '' : 'unread'}"><span class="dot" aria-hidden="true"></span><div>${esc(n.message)}<small>${fmt(n.createdAt)}</small></div></div>`).join('')
++        : '<div class="empty"><b>No notifications yet</b>Decisions on your bookings and repair reports appear here.</div>'}</div>
++      <div class="pager"><span>Showing ${d.items.length} of ${d.total}</span><div><button class="btn sm" id="prev" ${d.page <= 1 ? 'disabled' : ''}>‹ Prev</button><span>Page ${d.page} / ${pages}</span><button class="btn sm" id="next" ${d.page >= pages ? 'disabled' : ''}>Next ›</button></div></div>`;
++    document.getElementById('read-all').onclick = async () => { await api('/notifications/read-all', 'POST'); loadNotes(false); draw(); };
++    document.getElementById('prev').onclick = () => { notesPage--; draw(); };
++    document.getElementById('next').onclick = () => { notesPage++; draw(); };
++  };
++  notesPage = 1; await draw();
++}
++
++/* ---------- profile ---------- */
++async function profile(view) {
++  view.innerHTML = `<div class="page-head"><div><h1>Profile</h1><p class="sub">Your account, notifications and password.</p></div></div>
++    <div class="grid g2" style="align-items:start">
++      <div class="card pad"><h2>Account</h2>
++        <label for="p-name">Name</label><input id="p-name" maxlength="50" value="${esc(user.name)}"><div id="e-name"></div>
++        <label for="p-surname">Surname</label><input id="p-surname" maxlength="50" value="${esc(user.surname)}"><div id="e-surname"></div>
++        <label>E-mail</label><input value="${esc(user.email)}" disabled>
++        <label>Role</label><input value="${isAdmin() ? 'Administrator' : 'Student'}" disabled>
++        ${isAdmin() ? '' : `<label class="switch-row"><span class="switch"><input type="checkbox" id="p-mail" ${user.emailNotifications ? 'checked' : ''}><i></i></span><span><b>E-mail notifications</b><small>Receive booking confirmations and changes by e-mail, with a calendar file for confirmed bookings.</small></span></label>`}
++        <div id="p-msg"></div><div class="foot"><button class="btn primary" id="p-save">Save changes</button></div></div>
++      <div class="card pad"><h2>Change password</h2>
++        <label for="pw-cur">Current password</label><input id="pw-cur" type="password" autocomplete="current-password"><div id="e-currentPassword"></div>
++        <label for="pw-new">New password</label><input id="pw-new" type="password" autocomplete="new-password"><div id="e-newPassword"></div>
++        <label for="pw-cfm">Confirm new password</label><input id="pw-cfm" type="password" autocomplete="new-password"><div id="e-confirmPassword"></div>
++        <div id="pw-msg"></div><p class="sub" style="margin-top:12px">At least 8 characters with a letter and a digit. You will stay signed in here; other devices are signed out.</p>
++        <div class="foot"><button class="btn primary" id="pw-save">Change password</button></div></div></div>`;
++  const val = id => document.getElementById(id).value, set = (id, h) => { document.getElementById(id).innerHTML = h; };
++  document.getElementById('p-save').onclick = async () => {
++    ['e-name', 'e-surname', 'p-msg'].forEach(i => set(i, ''));
++    try {
++      user = await api('/profile', 'PUT', { name: val('p-name'), surname: val('p-surname'), emailNotifications: isAdmin() ? undefined : document.getElementById('p-mail').checked });
++      toast('Profile saved'); route();
++    } catch (er) {
++      if (er.handled) return;
++      set('e-name', fieldErr(er.fields, 'name')); set('e-surname', fieldErr(er.fields, 'surname'));
++      if (!Object.keys(er.fields).length) set('p-msg', `<div class="alert">${esc(er.message)}</div>`);
++    }
++  };
++  document.getElementById('pw-save').onclick = async () => {
++    ['e-currentPassword', 'e-newPassword', 'e-confirmPassword', 'pw-msg'].forEach(i => set(i, ''));
++    try {
++      await api('/profile/password', 'POST', { currentPassword: val('pw-cur'), newPassword: val('pw-new'), confirmPassword: val('pw-cfm') });
++      ['pw-cur', 'pw-new', 'pw-cfm'].forEach(i => { document.getElementById(i).value = ''; });
++      toast('Password changed');
++    } catch (er) {
++      if (er.handled) return;
++      ['currentPassword', 'newPassword', 'confirmPassword'].forEach(k => set('e-' + k, fieldErr(er.fields, k)));
++      if (!Object.keys(er.fields).length) set('pw-msg', `<div class="alert">${esc(er.message)}</div>`);
++    }
++  };
++}
++
++/* ---------- reports (admin) ---------- */
++let repDays = 30;
++async function reports(view) {
++  const draw = async () => {
++    let r; try { r = await api('/reports?days=' + repDays); } catch (e) { if (!e.handled) loadFailed(view); return; }
++    const maxDay = Math.max(1, ...r.perDay.map(x => x.total)), maxHours = Math.max(1, ...r.utilization.map(x => x.usedHours));
++    const stat = (l, n, sub, ico) => `<div class="card stat"><div class="top-row"><span class="l">${l}</span><span class="chip">${ico}</span></div><div class="n">${n}</div><div class="d">${sub}</div></div>`;
++    const step = Math.max(1, Math.ceil(r.perDay.length / 6));
++    const short = d => new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
++    view.innerHTML = `<div class="page-head"><div><h1>Reports</h1><p class="sub">${short(r.fromDate)} – ${short(r.toDate)} · equipment usage and faults</p></div>
++      <div class="tools"><select id="rep-days" style="width:170px">${[7, 30, 90].map(n => `<option value="${n}" ${n === repDays ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select></div></div>
++      <div class="grid g4">${stat('Bookings', r.totals.bookings, 'started in this period', ICON.bookings)}${stat('Booked hours', r.totals.usedHours, 'confirmed, in progress or finished', ICON.clock)}
++        ${stat('Utilization', r.totals.utilizationPercent + '%', 'of all bookable hours', ICON.pulse)}${stat('Repair reports', r.totals.repairs, `${r.totals.confirmedRepairs} confirmed`, ICON.repairs)}</div>
++      <div class="card sect"><div class="card-h">${ICON.pulse}<div class="ttl"><h2>Bookings per day</h2><small>All requests and the part that was actually used.</small></div>
++        <div class="right legend"><span><i class="l-total"></i>Requested</span><span><i class="l-used"></i>Used</span></div></div>
++        <div class="bars" role="img" aria-label="Bookings per day">${r.perDay.map((x, i) => `<div class="bar" title="${short(x.date)}: ${x.total} requested, ${x.used} used"><div class="bar-t" style="height:${Math.round(x.total * 100 / maxDay)}%"><div class="bar-u" style="height:${x.total ? Math.round(x.used * 100 / x.total) : 0}%"></div></div><span>${i % step === 0 ? short(x.date) : ''}</span></div>`).join('')}</div></div>
++      <div class="grid g2 sect" style="align-items:start">
++        <div class="card"><div class="card-h">${ICON.equipment}<div class="ttl"><h2>Equipment utilization</h2><small>Booked hours per piece of equipment.</small></div></div>
++          ${r.utilization.length ? r.utilization.slice(0, 10).map(u => `<div class="urow"><div class="un"><b>${esc(u.title)}</b><small>${esc(u.inventoryNumber)}</small></div><div class="ubar"><i style="width:${Math.round(u.usedHours * 100 / maxHours)}%"></i></div><span class="uv">${u.usedHours} h · ${u.percent}%</span></div>`).join('') : '<div class="empty"><b>No equipment</b></div>'}</div>
++        <div class="card"><div class="card-h">${ICON.repairs}<div class="ttl"><h2>Most frequent faults</h2><small>Equipment with the most problem reports.</small></div></div>
++          ${r.faults.length ? `<div class="tbl"><table><thead><tr><th>Equipment</th><th>Reports</th><th>Confirmed</th><th>Last report</th></tr></thead><tbody>${r.faults.map(f => `<tr><td><span class="nm">${esc(f.title)}</span><small>${esc(f.inventoryNumber)}</small></td><td>${f.reports}</td><td>${f.confirmed}</td><td>${fmtShort(f.lastReport)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty"><b>No problem reports</b>Nothing was reported in this period.</div>'}</div></div>
++      <div class="card sect"><div class="card-h">${ICON.list}<div class="ttl"><h2>Bookings by status</h2></div></div>
++        <div class="statusrow">${r.byStatus.length ? r.byStatus.map(s => `<div>${badge(s.status)}<b>${s.count}</b></div>`).join('') : '<span class="muted">No bookings in this period.</span>'}</div></div>`;
++    document.getElementById('rep-days').onchange = e => { repDays = Number(e.target.value); draw(); };
++  };
++  await draw();
++}
++
++/* ---------- rules & help (students) ---------- */
++async function help(view) {
++  let sc, eq;
++  try { [sc, eq] = await Promise.all([api('/schedule'), api('/equipment?pageSize=60&sort=name')]); } catch (e) { if (!e.handled) loadFailed(view); return; }
++  const contacts = eq.items.filter(e => e.contactName || e.contactEmail);
++  view.innerHTML = `<div class="page-head"><div><h1>Rules &amp; Help</h1><p class="sub">How booking works and whom to contact.</p></div></div>
++    <div class="grid g2" style="align-items:start">
++      <div class="card pad"><h2>Booking rules</h2><ul class="rules">
++        <li>A booking is <b>one hour</b> long. Slots start on the hour between <b>${hh(sc.openHour)}:00</b> and <b>${hh(sc.closeHour)}:00</b>.</li>
++        <li>You can book at most <b>${sc.maxDaysAhead} days</b> ahead, and only a slot that has not started yet.</li>
++        <li>A new request is <b>pending</b>: the slot is held for you until an administrator confirms or rejects it.</li>
++        <li>A request without a decision is canceled automatically after <b>${sc.pendingTimeoutHours} hours</b>, or when its start time is reached.</li>
++        <li>You can cancel a pending or confirmed booking until it starts.</li>
++        <li>Equipment under maintenance cannot be booked. If it is placed under maintenance, its pending and confirmed bookings are canceled and you are notified.</li>
++        <li>Found a fault? Use <a href="#/repairs">Report Issue</a> and describe the problem in English.</li></ul></div>
++      <div class="card pad"><h2>E-mail and calendar</h2><ul class="rules">
++        <li>You get an e-mail when a request is received, confirmed, rejected or canceled.</li>
++        <li>A confirmed booking comes with a calendar file (.ics) and an <b>Add to Google Calendar</b> link. A canceled booking removes the event again.</li>
++        <li>Switch e-mails on or off in your <a href="#/profile">profile</a>. Notifications inside LEMS always stay available under <a href="#/notifications">Notifications</a>.</li></ul></div></div>
++    <div class="card sect"><div class="card-h">${ICON.students}<div class="ttl"><h2>Who to contact</h2><small>Persons responsible for the equipment.</small></div></div>
++      ${contacts.length ? `<div class="tbl"><table><thead><tr><th>Equipment</th><th>Responsible</th><th>E-mail</th></tr></thead><tbody>${contacts.map(e => `<tr><td><span class="nm">${esc(e.title)}</span><small>${esc(e.inventoryNumber)} · ${esc(e.location)}</small></td><td>${esc(e.contactName) || '-'}</td>
++        <td>${e.contactEmail ? `<a href="mailto:${esc(e.contactEmail)}?subject=${encodeURIComponent('Question about ' + e.inventoryNumber)}">${esc(e.contactEmail)}</a>` : '-'}</td></tr>`).join('')}</tbody></table></div>`
++        : '<div class="empty"><b>No contacts yet</b>An administrator can add a responsible person to each piece of equipment.</div>'}</div>`;
++}
++
++
+ route();
+diff --git a/frontend/styles.css b/frontend/styles.css
+index c732e84..4e20a4c 100644
+--- a/frontend/styles.css
++++ b/frontend/styles.css
+@@ -276,6 +276,84 @@ td .nm { font-weight: 600; }
+ .formwrap .alt a { cursor: pointer; font-weight: 600; }
+ .formwrap .btn.primary { width: 100%; margin-top: 20px; padding: 9px 13px; font-size: 14px; }
+ 
++
++/* ---------- details dialog, calendar, notifications, profile, reports, help ---------- */
++.muted { color: var(--text-3); }
++.pad { padding: 18px 20px 16px; }
++.pad h2 { font-size: 15px; margin-bottom: 4px; }
++.eq .row { display: flex; align-items: center; gap: 8px; }
++.btn.icon.sm { width: 26px; height: 26px; }
++.btn.icon.sm svg { width: 14px; height: 14px; }
++.modal.wide { max-width: 560px; }
++.kvhead { display: flex; align-items: center; gap: 10px; margin: 6px 0 10px; flex-wrap: wrap; }
++.info-thumb { height: 150px; border-radius: var(--radius-sm); background: var(--surface-3); border: 1px solid var(--border); overflow: hidden; margin: 8px 0 4px; }
++.info-thumb svg, .info-thumb img { width: 100%; height: 100%; object-fit: cover; }
++.kv { display: grid; grid-template-columns: 110px 1fr; gap: 9px 14px; margin-top: 12px; font-size: 13px; }
++.kv dt { color: var(--text-3); font-weight: 500; }
++.kv dd { min-width: 0; overflow-wrap: anywhere; }
++.kv dd small { display: block; }
++.kv .pre { white-space: pre-wrap; }
++
++.cal-scroll { overflow-x: auto; border-top: 1px solid var(--border); }
++.cal { display: grid; grid-template-columns: 56px repeat(7, minmax(96px, 1fr)); min-width: 780px; }
++.cal-h { padding: 8px 6px; text-align: center; font-size: 11px; color: var(--text-3); background: var(--surface-2); border-bottom: 1px solid var(--border); border-left: 1px solid var(--border); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
++.cal-h:first-child { border-left: 0; }
++.cal-h b { display: block; font-size: 16px; color: var(--text); letter-spacing: 0; margin-top: 1px; }
++.cal-h.today { background: var(--accent-soft); color: var(--accent); }
++.cal-h.today b { color: var(--accent); }
++.cal-t { padding: 6px 8px 0; font-size: 11px; color: var(--text-3); text-align: right; border-bottom: 1px solid var(--border); background: var(--surface-2); }
++.cal-c { min-height: 46px; padding: 3px; border-left: 1px solid var(--border); border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 3px; }
++.cal-c.today { background: rgba(238,242,255,.45); }
++.chip { text-align: left; border: 1px solid var(--border-2); border-radius: 6px; padding: 3px 7px; font-size: 11.5px; font-weight: 600; cursor: pointer; line-height: 1.25; background: var(--surface-3); color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; }
++.chip small { display: block; font-weight: 500; color: inherit; opacity: .8; font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; }
++.chip:hover { filter: brightness(.97); box-shadow: var(--shadow-xs); }
++.chip.s-pending { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn); }
++.chip.s-confirmed { background: var(--ok-bg); border-color: var(--ok-line); color: var(--ok); }
++.chip.s-in_progress { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
++.chip.s-finished { background: var(--surface-3); border-color: var(--border-2); color: var(--text-3); }
++.legend .l-pending { background: var(--warn-bg); border-color: #E9C46A; }
++.legend .l-confirmed { background: var(--ok-bg); border-color: #6FD598; }
++.legend .l-in_progress { background: var(--accent-soft); border-color: #8E8AF0; }
++.legend .l-finished { background: var(--surface-3); border-color: var(--border-2); }
++.legend .l-total { background: var(--accent-soft); border-color: var(--accent-line); }
++.legend .l-used { background: var(--accent); border-color: var(--accent); }
++
++.nrow { display: flex; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 13.5px; align-items: flex-start; }
++.nrow:last-child { border-bottom: 0; }
++.nrow small { display: block; }
++.nrow .dot { width: 8px; height: 8px; border-radius: 50%; background: transparent; margin-top: 6px; flex: none; }
++.nrow.unread { background: var(--accent-soft); }
++.nrow.unread .dot { background: var(--accent); }
++
++.switch-row { display: flex; gap: 12px; align-items: flex-start; margin-top: 18px; cursor: pointer; font-weight: 400; color: var(--text); }
++.switch-row b { display: block; font-weight: 600; font-size: 13px; }
++.switch-row small { display: block; margin-top: 1px; line-height: 1.4; }
++.switch { position: relative; width: 34px; height: 20px; flex: none; margin-top: 1px; }
++.switch input { position: absolute; opacity: 0; inset: 0; width: 100%; height: 100%; cursor: pointer; margin: 0; padding: 0; z-index: 1; }
++.switch i { position: absolute; inset: 0; background: var(--border-2); border-radius: 20px; transition: background .15s; }
++.switch i::after { content: ''; position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: var(--shadow-xs); transition: transform .15s; }
++.switch input:checked + i { background: var(--accent); }
++.switch input:checked + i::after { transform: translateX(14px); }
++.switch input:focus-visible + i { outline: 2px solid var(--accent); outline-offset: 2px; }
++.pad .foot { margin-top: 18px; }
++
++.bars { display: flex; align-items: flex-end; gap: 3px; height: 190px; padding: 14px 16px 6px; border-top: 1px solid var(--border); }
++.bar { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; }
++.bar-t { width: 100%; background: var(--accent-soft); border: 1px solid var(--accent-line); border-bottom: 0; border-radius: 3px 3px 0 0; display: flex; align-items: flex-end; min-height: 2px; }
++.bar-u { width: 100%; background: var(--accent); border-radius: 2px 2px 0 0; }
++.bar span { font-size: 10px; color: var(--text-3); height: 12px; white-space: nowrap; }
++.urow { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 9px 16px; border-top: 1px solid var(--border); font-size: 13px; }
++.urow .un b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
++.urow .un small { display: block; }
++.ubar { height: 8px; background: var(--surface-3); border-radius: 8px; overflow: hidden; }
++.ubar i { display: block; height: 100%; background: var(--accent); border-radius: 8px; min-width: 2px; }
++.uv { font-size: 12px; color: var(--text-2); white-space: nowrap; min-width: 84px; text-align: right; }
++.statusrow { display: flex; gap: 22px; flex-wrap: wrap; padding: 6px 16px 16px; border-top: 1px solid var(--border); padding-top: 14px; }
++.statusrow > div { display: flex; align-items: center; gap: 8px; }
++.statusrow b { font-size: 16px; }
++.rules { margin: 10px 0 0 18px; display: grid; gap: 8px; color: var(--text-2); font-size: 13.5px; }
++.rules b { color: var(--text); }
++
+ /* ---------- responsive ---------- */
+ @media (max-width: 1100px) { .g4 { grid-template-columns: repeat(2, 1fr); } .g3 { grid-template-columns: repeat(2, 1fr); } }
+ @media (max-width: 900px) {
+@@ -285,5 +363,5 @@ td .nm { font-weight: 600; }
+   .top { padding: 12px 14px 0; } .content { padding: 16px 14px 48px; }
+   .auth { grid-template-columns: 1fr; } .hero { border-right: 0; border-bottom: 1px solid var(--border); padding: 30px 24px; } .preview { display: none; }
+ }
+-@media (max-width: 640px) { .g4, .g3, .g2 { grid-template-columns: 1fr; } .top .btn .lbl { display: none; } }
++@media (max-width: 640px) { .urow { grid-template-columns: 1fr auto; } .urow .ubar { grid-column: 1 / -1; order: 3; } .kv { grid-template-columns: 1fr; gap: 2px; } .kv dd { margin-bottom: 8px; } .g4, .g3, .g2 { grid-template-columns: 1fr; } .top .btn .lbl { display: none; } }
+ @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+diff --git a/tests/backend/ApiTests.cs b/tests/backend/ApiTests.cs
+index e1080de..a23f9fe 100644
+--- a/tests/backend/ApiTests.cs
++++ b/tests/backend/ApiTests.cs
+@@ -254,4 +254,72 @@ public class ApiTests : IClassFixture<LemsFactory>
+         var first = list.EnumerateArray().First();
+         foreach (var k in new[] { "name", "surname", "email", "bookings", "activeBookings", "repairs" }) Assert.True(first.TryGetProperty(k, out _), k);
+     }
++
++    // ---------- equipment info, profile, reports, notifications, calendar file ----------
++    [Fact] public async Task Equipment_info_fields_are_saved_and_validated()
++    {
++        var a = await f.Admin();
++        var bad = await a.PostAsJsonAsync("/api/equipment", new { inventoryNumber = Inv(), title = "Scope", description = "d", location = "Lab 1", category = "Testing", contactEmail = "not-an-email" });
++        Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
++        Assert.Contains("contactEmail", await bad.Content.ReadAsStringAsync());
++        var ok = await a.PostAsJsonAsync("/api/equipment", new { inventoryNumber = Inv(), title = "Scope", description = "d", location = "Lab 1", category = "Testing",
++            specifications = "Bandwidth 100 MHz", contactName = "Dr. Novak", contactEmail = "novak@tuke.sk" });
++        Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
++        var created = await Json(ok);
++        Assert.Equal("Bandwidth 100 MHz", created.GetProperty("specifications").GetString());
++        Assert.Equal("Dr. Novak", created.GetProperty("contactName").GetString());
++        Assert.Equal("novak@tuke.sk", created.GetProperty("contactEmail").GetString());
++    }
++    [Fact] public async Task Profile_can_be_updated_and_email_notifications_switched_off()
++    {
++        var s = await f.Student();
++        var r = await s.PutAsJsonAsync("/api/profile", new { name = "Jana", surname = "Kovacova", emailNotifications = false });
++        Assert.Equal(HttpStatusCode.OK, r.StatusCode);
++        var me = await Json(await s.GetAsync("/api/auth/me"));
++        Assert.Equal("Jana", me.GetProperty("name").GetString());
++        Assert.False(me.GetProperty("emailNotifications").GetBoolean());
++        Assert.Equal(HttpStatusCode.BadRequest, (await s.PutAsJsonAsync("/api/profile", new { name = "<b>x</b>", surname = "K" })).StatusCode);
++        await s.PutAsJsonAsync("/api/profile", new { name = "Jan", surname = "Novak", emailNotifications = true });   // restore for other tests
++    }
++    [Fact] public async Task Password_change_checks_the_current_password()
++    {
++        var s = await f.Student();
++        var wrong = await s.PostAsJsonAsync("/api/profile/password", new { currentPassword = "nope-nope1", newPassword = "Another123!", confirmPassword = "Another123!" });
++        Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
++        Assert.Contains("currentPassword", await wrong.Content.ReadAsStringAsync());
++        var weak = await s.PostAsJsonAsync("/api/profile/password", new { currentPassword = "Student123!", newPassword = "short", confirmPassword = "short" });
++        Assert.Equal(HttpStatusCode.BadRequest, weak.StatusCode);
++        var mismatch = await s.PostAsJsonAsync("/api/profile/password", new { currentPassword = "Student123!", newPassword = "Another123!", confirmPassword = "Different123!" });
++        Assert.Equal(HttpStatusCode.BadRequest, mismatch.StatusCode);
++    }
++    [Fact] public async Task Reports_are_admin_only_and_have_the_expected_shape()
++    {
++        Assert.Equal(HttpStatusCode.Forbidden, (await (await f.Student()).GetAsync("/api/reports")).StatusCode);
++        var r = await Json(await (await f.Admin()).GetAsync("/api/reports?days=14"));
++        Assert.Equal(14, r.GetProperty("days").GetInt32());
++        Assert.Equal(14, r.GetProperty("perDay").GetArrayLength());
++        foreach (var k in new[] { "totals", "byStatus", "utilization", "faults" }) Assert.True(r.TryGetProperty(k, out _), k);
++        Assert.True(r.GetProperty("totals").TryGetProperty("utilizationPercent", out _));
++    }
++    [Fact] public async Task Notifications_support_paging()
++    {
++        var s = await f.Student();
++        var r = await Json(await s.GetAsync("/api/notifications?page=1&pageSize=5"));
++        Assert.Equal(5, r.GetProperty("pageSize").GetInt32());
++        Assert.True(r.GetProperty("total").GetInt32() >= r.GetProperty("items").GetArrayLength());
++    }
++    [Fact] public void Ics_event_is_valid_and_cancel_uses_the_same_uid()
++    {
++        var b = new Booking { Id = 42, Description = "Lab, part 1; \"test\"", StartTime = new DateTime(2030, 5, 6, 9, 0, 0), EndTime = new DateTime(2030, 5, 6, 10, 0, 0) };
++        var publish = Ics.Event(b, "Oscilloscope", "Lab 1", "PUBLISH");
++        var cancel = Ics.Event(b, "Oscilloscope", "Lab 1", "CANCEL");
++        Assert.Contains("UID:booking-42@lems", publish);
++        Assert.Contains("UID:booking-42@lems", cancel);
++        Assert.Contains("METHOD:PUBLISH", publish); Assert.Contains("METHOD:CANCEL", cancel);
++        Assert.Contains("STATUS:CANCELLED", cancel); Assert.Contains("SEQUENCE:1", cancel);
++        Assert.Contains("DTSTART:20300506T090000", publish); Assert.Contains("DTEND:20300506T100000", publish);
++        Assert.Contains("Lab\\, part 1\\; ", publish);   // commas and semicolons are escaped
++        Assert.All(publish.Split("\r\n"), line => Assert.True(line.Length <= 75, line));
++        Assert.EndsWith("END:VCALENDAR\r\n", publish);
++    }
+ }
+diff --git a/tests/frontend/mock.mjs b/tests/frontend/mock.mjs
+index a061c11..8774aef 100644
+--- a/tests/frontend/mock.mjs
++++ b/tests/frontend/mock.mjs
+@@ -2,7 +2,7 @@
+ export const iso = (h) => { const d = new Date(Date.now() + h * 3600e3); return d.toISOString().slice(0, 19); };
+ export const EVIL = '<img src=x onerror="window.__xss=1">';
+ 
+-export const eq = (id, title, status, category = 'Electronics', hasImage = false) => ({ id, inventoryNumber: 'ARD-00' + id, title, description: '', location: 'Lab', category, status, createdAt: iso(-50), hasImage, imageVersion: hasImage ? 123 : 0 });
++export const eq = (id, title, status, category = 'Electronics', hasImage = false, extra = {}) => ({ id, inventoryNumber: 'ARD-00' + id, title, description: '', location: 'Lab', category, status, createdAt: iso(-50), hasImage, imageVersion: hasImage ? 123 : 0, specifications: '', contactName: '', contactEmail: '', ...extra });
+ const report = { symptoms: ['S1'], possible_causes: ['C1'], recommended_checks: ['K1'], missing_information: ['M1'], documentation_status: 'ok',
+   documentation_sources: [{ source_id: 'S1', title: 'Manual', url: 'https://example.com/m.pdf' }, { source_id: 'S2', title: 'Evil', url: 'javascript:alert(1)' }] };
+ const repair = (id, stage, ai) => ({ id, title: 'T' + id, description: 'D' + id, status: stage === 'RESOLVED' ? 'CLOSED' : 'OPEN', confirmed: stage === 'IN_REPAIR', resolution: null, stage,
+@@ -12,7 +12,7 @@ const TITLES = [EVIL, 'Printer', 'Robot arm', 'Oscilloscope', 'Microscope', 'Cen
+ const STATUS = ['AVAILABLE', 'RESERVED', 'MAINTENANCE', 'AVAILABLE', 'AVAILABLE', 'AVAILABLE', 'AVAILABLE'];
+ 
+ export function mockApi(role) {
+-  const me = { id: role === 'ADMIN' ? 1 : 2, name: role === 'ADMIN' ? 'Admin' : 'Jan', surname: 'User', email: 'u@x.sk', role };
++  const me = { id: role === 'ADMIN' ? 1 : 2, name: role === 'ADMIN' ? 'Admin' : 'Jan', surname: 'User', email: 'u@x.sk', role, emailNotifications: true };
+   const slots = Array.from({ length: 12 }, (_, i) => { const s = new Date(Date.now() + 86400e3); s.setHours(8 + i, 0, 0, 0); const e = new Date(s.getTime() + 3600e3);
+     return { start: s.toISOString().slice(0, 19), end: e.toISOString().slice(0, 19), state: i % 4 === 0 ? 'taken' : 'free' }; });
+   // schedule: row 3 is under maintenance; per row hours 0,4,8 booked by others, hour 9 is the viewer's own booking, hour 8+1 past
+@@ -20,19 +20,30 @@ export function mockApi(role) {
+     slots: slots.map((s, i) => ({ hour: 8 + i, start: s.start, end: s.end,
+       state: STATUS[k] === 'MAINTENANCE' ? 'maintenance' : i % 4 === 0 ? 'taken' : i === 1 ? 'mine' : i === 2 ? 'past' : 'free' })) }));
+   const bookingsList = [1, 2, 3].map(i => ({ id: i, equipmentId: 1, equipmentTitle: 'Arduino', inventoryNumber: 'ARD-001', location: 'Lab', userId: 2, studentName: 'Jan Novak', studentEmail: 'j@x.sk', description: i === 1 ? EVIL : 'Experiment ' + i,
+-    start: iso(5 + i), end: iso(6 + i), status: ['PENDING', 'CONFIRMED', 'FINISHED'][i - 1], createdAt: iso(-i), canCancel: i < 3, canDecide: role === 'ADMIN' && i === 1 }));
++    start: iso(0).slice(0, 11) + String(10 + i).padStart(2, '0') + ':00:00', end: iso(0).slice(0, 11) + String(11 + i).padStart(2, '0') + ':00:00', status: ['PENDING', 'CONFIRMED', 'FINISHED'][i - 1], createdAt: iso(-i), canCancel: i < 3, canDecide: role === 'ADMIN' && i === 1 }));
+   return (path) => {
+     const p = path.split('?')[0];
+     if (p === '/auth/me') return me;
+-    if (p === '/notifications') return { unread: 1, items: [{ id: 1, message: 'Hello', isRead: false, createdAt: iso(-1) }] };
++    if (p === '/notifications') return { unread: 1, total: 2, page: 1, pageSize: 15, items: [{ id: 2, message: EVIL, isRead: false, createdAt: iso(-1) }, { id: 1, message: 'Your booking of Arduino was confirmed.', isRead: true, createdAt: iso(-30) }] };
++    if (p === '/profile') return me;
++    if (p === '/reports') {
++      if (role !== 'ADMIN') throw new Error('forbidden');
++      const days = Number((path.split('days=')[1] || '30'));
++      return { days, fromDate: '2026-10-13', toDate: '2026-11-11',
++        totals: { bookings: 42, usedHours: 31, repairs: 5, confirmedRepairs: 3, utilizationPercent: 12.4 },
++        perDay: Array.from({ length: days }, (_, i) => ({ date: '2026-10-' + String(1 + (i % 28)).padStart(2, '0'), total: (i * 3) % 7, used: (i * 3) % 5 })),
++        byStatus: [{ status: 'FINISHED', count: 20 }, { status: 'CONFIRMED', count: 10 }, { status: 'PENDING', count: 4 }, { status: 'CANCELED', count: 8 }],
++        utilization: [{ id: 1, inventoryNumber: 'ARD-001', title: EVIL, usedHours: 12, percent: 4.1 }, { id: 2, inventoryNumber: 'ARD-002', title: 'Printer', usedHours: 6, percent: 2 }],
++        faults: [{ equipmentId: 1, inventoryNumber: 'ARD-001', title: 'Arduino', reports: 3, confirmed: 2, lastReport: iso(-5) }] };
++    }
+     if (p === '/dashboard') return { equipment: { available: 5, reserved: 1, maintenance: 1, total: 7 }, admin: role === 'ADMIN' ? { repairsOpen: 2, repairsClosed: 1, students: 4, admins: 1, pendingBookings: 2 } : null, feed: [{ id: 1, message: EVIL, createdAt: iso(-1) }] };
+-    if (p === '/schedule') return { date: new Date().toISOString().slice(0, 10), openHour: 8, closeHour: 20, equipment: scheduleRows };
++    if (p === '/schedule') return { date: new Date().toISOString().slice(0, 10), openHour: 8, closeHour: 20, maxDaysAhead: 60, pendingTimeoutHours: 24, equipment: scheduleRows };
+     if (p === '/students') {
+       if (role !== 'ADMIN') throw new Error('forbidden');
+       return [{ id: 2, name: 'Jan', surname: 'Novak', email: 'jan.novak@student.tuke.sk', createdAt: iso(-500), bookings: 3, activeBookings: 2, repairs: 1 },
+               { id: 3, name: EVIL, surname: 'Kral', email: 'eva.kral@student.tuke.sk', createdAt: iso(-90), bookings: 0, activeBookings: 0, repairs: 0 }];
+     }
+-    if (p === '/equipment') return { items: [eq(1, EVIL, 'AVAILABLE'), eq(2, 'Printer', 'RESERVED', 'Computing', true), eq(3, 'Robot', 'MAINTENANCE', 'Robotics')], total: 3, page: 1, pageSize: 9, counts: { all: 3, available: 1, reserved: 1, maintenance: 1 }, categories: ['Electronics'] };
++    if (p === '/equipment') return { items: [eq(1, EVIL, 'AVAILABLE', 'Electronics', false, { description: 'Desc', specifications: 'Power: 230 V\n' + EVIL, contactName: 'Dr. Novak', contactEmail: 'novak@tuke.sk' }), eq(2, 'Printer', 'RESERVED', 'Computing', true, { contactEmail: 'x"onmouseover="window.__xss=1' }), eq(3, 'Robot', 'MAINTENANCE', 'Robotics')], total: 3, page: 1, pageSize: 9, counts: { all: 3, available: 1, reserved: 1, maintenance: 1 }, categories: ['Electronics'] };
+     if (/^\/equipment\/\d+\/slots/.test(p)) return { equipment: eq(1, 'Arduino', 'AVAILABLE'), slots };
+     if (p === '/bookings') return bookingsList;
+     if (p === '/repairs') return [repair(1, 'AWAITING_REVIEW', { ok: true, report }), repair(2, 'IN_REPAIR', { ok: false, code: 'MODEL_UNAVAILABLE', message: 'x' }), repair(3, 'RESOLVED', null), repair(4, 'NO_REPAIR_REQUIRED', null)];
+diff --git a/tests/frontend/smoke.test.mjs b/tests/frontend/smoke.test.mjs
+index fd19b66..2584eb7 100644
+--- a/tests/frontend/smoke.test.mjs
++++ b/tests/frontend/smoke.test.mjs
+@@ -29,8 +29,10 @@ async function boot(role, hash) {
+ async function waitFor(fn, ms = 2000) { const t = Date.now(); while (!fn()) { if (Date.now() - t > ms) throw new Error('timeout'); await new Promise(r => setTimeout(r, 10)); } }
+ 
+ const TITLES = {
+-  ADMIN: [['#/dashboard', 'Equipment Availability'], ['#/equipment', 'Equipment'], ['#/bookings', 'Bookings'], ['#/repairs', 'Repair Requests'], ['#/inventory', 'Inventory'], ['#/students', 'Students']],
+-  STUDENT: [['#/dashboard', 'Equipment Availability'], ['#/equipment', 'Equipment'], ['#/bookings', 'My Bookings'], ['#/repairs', 'Report Issue']]
++  ADMIN: [['#/dashboard', 'Equipment Availability'], ['#/equipment', 'Equipment'], ['#/calendar', 'Calendar'], ['#/bookings', 'Bookings'], ['#/repairs', 'Repair Requests'], ['#/inventory', 'Inventory'], ['#/students', 'Students'],
++          ['#/reports', 'Reports'], ['#/notifications', 'Notifications'], ['#/profile', 'Profile']],
++  STUDENT: [['#/dashboard', 'Equipment Availability'], ['#/equipment', 'Equipment'], ['#/calendar', 'Calendar'], ['#/bookings', 'My Bookings'], ['#/repairs', 'Report Issue'],
++            ['#/notifications', 'Notifications'], ['#/profile', 'Profile'], ['#/help', 'Rules & Help']]
+ };
+ for (const role of ['ADMIN', 'STUDENT']) {
+   for (const [hash, title] of TITLES[role]) {
+@@ -42,24 +44,26 @@ for (const role of ['ADMIN', 'STUDENT']) {
+       assert.equal(w.__xss, undefined, 'script injection must not run');
+       assert.equal(d.querySelector('#view img:not(.photo)'), null, 'user text must be escaped');
+       assert.equal(d.querySelector('#view [onerror]'), null, 'no injected handlers');
+-      assert.equal(d.querySelectorAll('.nav a').length, role === 'ADMIN' ? 6 : 4);
++      assert.equal(d.querySelectorAll('.nav a').length, role === 'ADMIN' ? 10 : 8);
+       assert.equal(d.querySelectorAll('.nav a.active').length, 1);
+     });
+   }
+ }
+ 
+-test('STUDENT cannot open admin-only pages', async () => {
+-  for (const hash of ['#/students', '#/inventory']) {
++test('STUDENT cannot open admin-only pages, ADMIN has no student help page', async () => {
++  for (const hash of ['#/students', '#/inventory', '#/reports']) {
+     const { d } = await boot('STUDENT', hash);
+     assert.equal(d.querySelector('#view h1').textContent, 'Equipment Availability');
+   }
++  const a = await boot('ADMIN', '#/help');
++  assert.equal(a.d.querySelector('#view h1').textContent, 'Equipment Availability');
+ });
+ 
+ test('sidebar groups: admin has an extra Admin section, student does not', async () => {
+   const a = await boot('ADMIN', '#/dashboard');
+-  assert.deepEqual([...a.d.querySelectorAll('.nav-h')].map(x => x.textContent), ['Main', 'Admin']);
++  assert.deepEqual([...a.d.querySelectorAll('.nav-h')].map(x => x.textContent), ['Main', 'Admin', 'Account']);
+   const s = await boot('STUDENT', '#/dashboard');
+-  assert.deepEqual([...s.d.querySelectorAll('.nav-h')].map(x => x.textContent), ['Main']);
++  assert.deepEqual([...s.d.querySelectorAll('.nav-h')].map(x => x.textContent), ['Main', 'Account']);
+   assert.match(s.d.querySelector('.side-user').textContent, /Jan User/);
+ });
+ 
+@@ -249,3 +253,98 @@ test('brand logo: sidebar icon and login wordmark', async () => {
+   await waitFor(() => w.document.querySelector('.hero'));
+   assert.match(w.document.querySelector('.hero img.hero-logo').getAttribute('src'), /^wordmark\.svg/);
+ });
++
++test('equipment details dialog: specifications, responsible person, safe mailto', async () => {
++  const { w, d } = await boot('STUDENT', '#/equipment');
++  d.querySelector('[data-act="info"][data-id="1"]').click();
++  await waitFor(() => d.querySelector('.modal .kv'));
++  const text = d.querySelector('.modal').textContent;
++  assert.match(text, /Power: 230 V/); assert.match(text, /Dr\. Novak/);
++  const a = d.querySelector('.modal .kv a');
++  assert.equal(a.getAttribute('href'), 'mailto:novak@tuke.sk?subject=Question%20about%20ARD-001');
++  assert.equal(d.querySelector('.modal [onerror], .modal img:not(.photo)'), null, 'specifications are escaped');
++  assert.ok(d.querySelector('.modal #bk'), 'students can book from the dialog');
++  // a contact e-mail that tries to break out of the attribute stays inert
++  d.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape' }));
++  d.querySelector('[data-act="info"][data-id="2"]').click();
++  await waitFor(() => d.querySelector('.modal .kv'));
++  assert.equal(d.querySelector('.modal .kv a').hasAttribute('onmouseover'), false);
++  assert.equal(w.__xss, undefined);
++});
++
++test('ADMIN details dialog has no booking button; equipment form has the new fields', async () => {
++  const { d } = await boot('ADMIN', '#/equipment');
++  d.querySelector('[data-act="info"][data-id="1"]').click();
++  await waitFor(() => d.querySelector('.modal .kv'));
++  assert.equal(d.querySelector('.modal #bk'), null);
++  d.querySelector('#cx').click();
++  d.querySelector('[data-act="edit"][data-id="1"]').click();
++  await waitFor(() => d.querySelector('.modal #f-specifications'));
++  assert.equal(d.querySelector('#f-contactName').value, 'Dr. Novak');
++  assert.equal(d.querySelector('#f-contactEmail').value, 'novak@tuke.sk');
++});
++
++test('calendar: week grid with bookings, details dialog and week navigation', async () => {
++  const { d } = await boot('STUDENT', '#/calendar');
++  assert.equal(d.querySelectorAll('.cal-h').length, 8, 'corner + 7 days');
++  assert.equal(d.querySelectorAll('.cal-t').length, 12, 'one row per hour 08-19');
++  assert.ok(d.querySelectorAll('.cal .chip').length >= 1);
++  assert.equal(d.querySelector('.cal-h.today').textContent.length > 0, true);
++  d.querySelector('.cal .chip').click();
++  await waitFor(() => d.querySelector('.modal .kv'));
++  assert.match(d.querySelector('.modal').textContent, /Purpose/);
++  d.querySelector('#cx').click();
++  d.getElementById('c-next').click();
++  await waitFor(() => d.querySelectorAll('.cal .chip').length === 0);
++});
++
++test('ADMIN calendar shows student names and an equipment filter', async () => {
++  const { d } = await boot('ADMIN', '#/calendar');
++  assert.ok(d.getElementById('cal-eq'));
++  assert.match(d.querySelector('.cal .chip small').textContent, /Jan Novak/);
++});
++
++test('notifications page: list, unread marker, escaping and paging', async () => {
++  const { d, w } = await boot('STUDENT', '#/notifications');
++  assert.equal(d.querySelectorAll('.nrow').length, 2);
++  assert.equal(d.querySelectorAll('.nrow.unread').length, 1);
++  assert.equal(d.getElementById('read-all').disabled, false);
++  assert.equal(d.getElementById('prev').disabled, true);
++  assert.match(d.querySelector('.page-head .sub').textContent, /e-mail/);
++  assert.equal(w.__xss, undefined);
++});
++
++test('profile: account form, e-mail switch for students only, password form', async () => {
++  const s = await boot('STUDENT', '#/profile');
++  assert.equal(s.d.getElementById('p-name').value, 'Jan');
++  assert.equal(s.d.getElementById('p-mail').checked, true);
++  assert.equal(s.d.querySelector('input[value="u@x.sk"]').disabled, true, 'e-mail is read-only');
++  assert.ok(s.d.getElementById('pw-cur') && s.d.getElementById('pw-new') && s.d.getElementById('pw-cfm'));
++  const a = await boot('ADMIN', '#/profile');
++  assert.equal(a.d.getElementById('p-mail'), null);
++});
++
++test('ADMIN reports: totals, per-day bars, utilization and faults', async () => {
++  const { d, w } = await boot('ADMIN', '#/reports');
++  assert.equal(d.querySelectorAll('.stat').length, 4);
++  assert.equal(d.querySelectorAll('.bars .bar').length, 30);
++  assert.ok(d.querySelector('.urow'));
++  assert.match(d.getElementById('view').textContent, /Most frequent faults/);
++  assert.equal(d.querySelectorAll('.statusrow .badge').length, 4);
++  d.getElementById('rep-days').value = '7'; d.getElementById('rep-days').dispatchEvent(new w.Event('change'));
++  await waitFor(() => d.querySelectorAll('.bars .bar').length === 7);
++  assert.equal(w.__xss, undefined);
++});
++
++test('STUDENT help page: booking rules from the server settings and contacts', async () => {
++  const { d } = await boot('STUDENT', '#/help');
++  const text = d.getElementById('view').textContent;
++  assert.match(text, /08:00/); assert.match(text, /60 days/); assert.match(text, /24 hours/);
++  assert.match(text, /Dr\. Novak/);
++  assert.ok(d.querySelector('a[href^="mailto:novak@tuke.sk"]'));
++});
++
++test('bell dropdown links to the full notification list', async () => {
++  const { w, d } = await boot('STUDENT', '#/dashboard');
++  await waitFor(() => d.querySelector('#notes a[href="#/notifications"]'));
++});

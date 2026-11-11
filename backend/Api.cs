@@ -107,6 +107,7 @@ public static class Api
         api.MapPut("/equipment/{id:int}", UpdateEquipment);
         api.MapDelete("/equipment/{id:int}", DeleteEquipment);
         api.MapGet("/equipment/{id:int}/slots", Slots);
+        api.MapGet("/schedule", Schedule);
         api.MapGet("/equipment/{id:int}/image", GetImage);
         api.MapPut("/equipment/{id:int}/image", PutImage);
         api.MapDelete("/equipment/{id:int}/image", DeleteImage);
@@ -123,6 +124,8 @@ public static class Api
         api.MapPost("/repairs/{id:int}/dismiss", DismissRepair);
         api.MapPost("/repairs/{id:int}/complete", CompleteRepair);
         api.MapPost("/repairs/{id:int}/analyze", AnalyzeRepair);
+
+        api.MapGet("/students", ListStudents);
 
         api.MapGet("/notifications", ListNotifications);
         api.MapPost("/notifications/read-all", ReadAll);
@@ -486,6 +489,45 @@ public static class Api
         return Results.Ok(new { equipment = EqDto(eq), slots });
     }
 
+    /// <summary>Dashboard schedule: every piece of equipment with the state of each hourly slot of one day
+    /// (free / taken / mine / past / maintenance). One call instead of one /slots request per equipment.</summary>
+    static async Task<IResult> Schedule(string? date, HttpContext http, CoreDb core, OpsDb ops, IOptions<LemsOptions> opt)
+    {
+        var me = Security.Current(http);
+        if (me == null) return Unauth();
+        var day = DateOnly.FromDateTime(DateTime.Now);
+        if (!string.IsNullOrWhiteSpace(date) && !DateOnly.TryParse(date, out day)) return Err(400, "Invalid date");
+        var from = day.ToDateTime(TimeOnly.MinValue);
+        var to = from.AddDays(1);
+        var equipment = await core.Equipment.OrderBy(e => e.Title).ToListAsync();
+        var busy = await ops.Bookings.Where(b => b.StartTime >= from && b.StartTime < to &&
+            (b.Status == BookingStatus.PENDING || b.Status == BookingStatus.CONFIRMED || b.Status == BookingStatus.IN_PROGRESS))
+            .Select(b => new { b.EquipmentId, b.StartTime, b.UserId }).ToListAsync();
+        var now = DateTime.Now;
+        var open = opt.Value.OpenHour;
+        var close = opt.Value.CloseHour;
+        var rows = equipment.Select(e => new
+        {
+            id = e.Id,
+            inventoryNumber = e.InventoryNumber,
+            title = e.Title,
+            category = e.Category,
+            location = e.Location,
+            status = e.Status,
+            slots = Enumerable.Range(open, Math.Max(0, close - open)).Select(h =>
+            {
+                var s = from.AddHours(h);
+                var taken = busy.FirstOrDefault(b => b.EquipmentId == e.Id && b.StartTime == s);
+                var state = e.Status == EquipmentStatus.MAINTENANCE ? "maintenance"
+                    : taken != null ? (taken.UserId == me.Id ? "mine" : "taken")
+                    : s <= now ? "past"
+                    : "free";
+                return new { hour = h, start = s, end = s.AddHours(1), state };
+            }).ToList()
+        }).ToList();
+        return Results.Ok(new { date = day.ToString("yyyy-MM-dd"), openHour = open, closeHour = close, equipment = rows });
+    }
+
     // ---------- bookings (Ops, joined with Core in code) ----------
     static async Task<IResult> ListBookings(HttpContext http, CoreDb core, OpsDb ops, string? status)
     {
@@ -779,6 +821,33 @@ public static class Api
         }
         catch (DbUpdateException) { return Err(500, "Saving failed - please press the button again (the action is safe to repeat)."); }
         return Results.Ok(new { repeated = false, request = RepairDto(r, eq, null, me) });
+    }
+
+    // ---------- students (administrators only) ----------
+    static async Task<IResult> ListStudents(HttpContext http, CoreDb core, OpsDb ops)
+    {
+        var me = Security.Current(http);
+        if (me == null) return Unauth();
+        if (me.Role != Role.ADMIN) return Forbidden();
+        var users = await core.Users.Where(u => u.Role == Role.STUDENT).OrderBy(u => u.Surname).ThenBy(u => u.Name).ToListAsync();
+        var ids = users.Select(u => u.Id).ToList();
+        var bookingStats = await ops.Bookings.Where(b => ids.Contains(b.UserId)).GroupBy(b => b.UserId)
+            .Select(g => new
+            {
+                UserId = g.Key,
+                Total = g.Count(),
+                Active = g.Count(x => x.Status == BookingStatus.PENDING || x.Status == BookingStatus.CONFIRMED || x.Status == BookingStatus.IN_PROGRESS)
+            }).ToListAsync();
+        var repairStats = await ops.RepairRequests.Where(r => ids.Contains(r.CreatedBy)).GroupBy(r => r.CreatedBy)
+            .Select(g => new { UserId = g.Key, Total = g.Count() }).ToListAsync();
+        return Results.Ok(users.Select(u => new
+        {
+            u.Id, u.Name, u.Surname, u.Email,
+            createdAt = u.CreatedAt,
+            bookings = bookingStats.FirstOrDefault(x => x.UserId == u.Id)?.Total ?? 0,
+            activeBookings = bookingStats.FirstOrDefault(x => x.UserId == u.Id)?.Active ?? 0,
+            repairs = repairStats.FirstOrDefault(x => x.UserId == u.Id)?.Total ?? 0
+        }));
     }
 
     // ---------- notifications (Ops) ----------

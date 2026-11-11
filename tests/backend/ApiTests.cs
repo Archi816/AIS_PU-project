@@ -210,4 +210,48 @@ public class ApiTests : IClassFixture<LemsFactory>
         Assert.Equal(HttpStatusCode.OK, (await s.GetAsync("/api/dashboard")).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await s.GetAsync("/api/notifications")).StatusCode);
     }
+
+    // ---------- dashboard schedule + students list ----------
+    [Fact] public async Task Schedule_requires_login()
+    {
+        Assert.Equal(HttpStatusCode.Unauthorized, (await f.NewClient().GetAsync("/api/schedule")).StatusCode);
+    }
+    [Fact] public async Task Schedule_shows_taken_mine_and_maintenance_slots()
+    {
+        var a = await f.Admin(); var s = await f.Student(); var other = await f.LoginAs("admin@lems.local", "Admin123!");
+        var eq = await NewEquipment(a);
+        var day = DateTime.Today.AddDays(4);
+        Assert.Equal(HttpStatusCode.OK, (await s.PostAsJsonAsync("/api/bookings", Book(eq, Slot(4, 10)))).StatusCode);
+        var date = day.ToString("yyyy-MM-dd");
+
+        string State(JsonElement sched, int id, int hour)
+        {
+            var row = sched.GetProperty("equipment").EnumerateArray().First(e => e.GetProperty("id").GetInt32() == id);
+            return row.GetProperty("slots").EnumerateArray().First(x => x.GetProperty("hour").GetInt32() == hour).GetProperty("state").GetString()!;
+        }
+        var mine = await Json(await s.GetAsync("/api/schedule?date=" + date));
+        Assert.Equal("mine", State(mine, eq, 10));
+        Assert.Equal("free", State(mine, eq, 11));
+        var theirs = await Json(await other.GetAsync("/api/schedule?date=" + date));
+        Assert.Equal("taken", State(theirs, eq, 10));
+
+        var put = await a.PutAsJsonAsync($"/api/equipment/{eq}", new { inventoryNumber = Inv(), title = "Test device", description = "d", location = "Lab 1", category = "Testing", status = "MAINTENANCE" });
+        Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+        var maint = await Json(await s.GetAsync("/api/schedule?date=" + date));
+        Assert.Equal("maintenance", State(maint, eq, 12));
+    }
+    [Fact] public async Task Schedule_rejects_invalid_date()
+    {
+        var s = await f.Student();
+        Assert.Equal(HttpStatusCode.BadRequest, (await s.GetAsync("/api/schedule?date=not-a-date")).StatusCode);
+    }
+    [Fact] public async Task Students_list_is_admin_only()
+    {
+        Assert.Equal(HttpStatusCode.Unauthorized, (await f.NewClient().GetAsync("/api/students")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await (await f.Student()).GetAsync("/api/students")).StatusCode);
+        var list = await Json(await (await f.Admin()).GetAsync("/api/students"));
+        Assert.True(list.GetArrayLength() >= 1);
+        var first = list.EnumerateArray().First();
+        foreach (var k in new[] { "name", "surname", "email", "bookings", "activeBookings", "repairs" }) Assert.True(first.TryGetProperty(k, out _), k);
+    }
 }
