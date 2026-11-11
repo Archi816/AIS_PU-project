@@ -254,4 +254,72 @@ public class ApiTests : IClassFixture<LemsFactory>
         var first = list.EnumerateArray().First();
         foreach (var k in new[] { "name", "surname", "email", "bookings", "activeBookings", "repairs" }) Assert.True(first.TryGetProperty(k, out _), k);
     }
+
+    // ---------- equipment info, profile, reports, notifications, calendar file ----------
+    [Fact] public async Task Equipment_info_fields_are_saved_and_validated()
+    {
+        var a = await f.Admin();
+        var bad = await a.PostAsJsonAsync("/api/equipment", new { inventoryNumber = Inv(), title = "Scope", description = "d", location = "Lab 1", category = "Testing", contactEmail = "not-an-email" });
+        Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+        Assert.Contains("contactEmail", await bad.Content.ReadAsStringAsync());
+        var ok = await a.PostAsJsonAsync("/api/equipment", new { inventoryNumber = Inv(), title = "Scope", description = "d", location = "Lab 1", category = "Testing",
+            specifications = "Bandwidth 100 MHz", contactName = "Dr. Novak", contactEmail = "novak@tuke.sk" });
+        Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
+        var created = await Json(ok);
+        Assert.Equal("Bandwidth 100 MHz", created.GetProperty("specifications").GetString());
+        Assert.Equal("Dr. Novak", created.GetProperty("contactName").GetString());
+        Assert.Equal("novak@tuke.sk", created.GetProperty("contactEmail").GetString());
+    }
+    [Fact] public async Task Profile_can_be_updated_and_email_notifications_switched_off()
+    {
+        var s = await f.Student();
+        var r = await s.PutAsJsonAsync("/api/profile", new { name = "Jana", surname = "Kovacova", emailNotifications = false });
+        Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+        var me = await Json(await s.GetAsync("/api/auth/me"));
+        Assert.Equal("Jana", me.GetProperty("name").GetString());
+        Assert.False(me.GetProperty("emailNotifications").GetBoolean());
+        Assert.Equal(HttpStatusCode.BadRequest, (await s.PutAsJsonAsync("/api/profile", new { name = "<b>x</b>", surname = "K" })).StatusCode);
+        await s.PutAsJsonAsync("/api/profile", new { name = "Jan", surname = "Novak", emailNotifications = true });   // restore for other tests
+    }
+    [Fact] public async Task Password_change_checks_the_current_password()
+    {
+        var s = await f.Student();
+        var wrong = await s.PostAsJsonAsync("/api/profile/password", new { currentPassword = "nope-nope1", newPassword = "Another123!", confirmPassword = "Another123!" });
+        Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
+        Assert.Contains("currentPassword", await wrong.Content.ReadAsStringAsync());
+        var weak = await s.PostAsJsonAsync("/api/profile/password", new { currentPassword = "Student123!", newPassword = "short", confirmPassword = "short" });
+        Assert.Equal(HttpStatusCode.BadRequest, weak.StatusCode);
+        var mismatch = await s.PostAsJsonAsync("/api/profile/password", new { currentPassword = "Student123!", newPassword = "Another123!", confirmPassword = "Different123!" });
+        Assert.Equal(HttpStatusCode.BadRequest, mismatch.StatusCode);
+    }
+    [Fact] public async Task Reports_are_admin_only_and_have_the_expected_shape()
+    {
+        Assert.Equal(HttpStatusCode.Forbidden, (await (await f.Student()).GetAsync("/api/reports")).StatusCode);
+        var r = await Json(await (await f.Admin()).GetAsync("/api/reports?days=14"));
+        Assert.Equal(14, r.GetProperty("days").GetInt32());
+        Assert.Equal(14, r.GetProperty("perDay").GetArrayLength());
+        foreach (var k in new[] { "totals", "byStatus", "utilization", "faults" }) Assert.True(r.TryGetProperty(k, out _), k);
+        Assert.True(r.GetProperty("totals").TryGetProperty("utilizationPercent", out _));
+    }
+    [Fact] public async Task Notifications_support_paging()
+    {
+        var s = await f.Student();
+        var r = await Json(await s.GetAsync("/api/notifications?page=1&pageSize=5"));
+        Assert.Equal(5, r.GetProperty("pageSize").GetInt32());
+        Assert.True(r.GetProperty("total").GetInt32() >= r.GetProperty("items").GetArrayLength());
+    }
+    [Fact] public void Ics_event_is_valid_and_cancel_uses_the_same_uid()
+    {
+        var b = new Booking { Id = 42, Description = "Lab, part 1; \"test\"", StartTime = new DateTime(2030, 5, 6, 9, 0, 0), EndTime = new DateTime(2030, 5, 6, 10, 0, 0) };
+        var publish = Ics.Event(b, "Oscilloscope", "Lab 1", "PUBLISH");
+        var cancel = Ics.Event(b, "Oscilloscope", "Lab 1", "CANCEL");
+        Assert.Contains("UID:booking-42@lems", publish);
+        Assert.Contains("UID:booking-42@lems", cancel);
+        Assert.Contains("METHOD:PUBLISH", publish); Assert.Contains("METHOD:CANCEL", cancel);
+        Assert.Contains("STATUS:CANCELLED", cancel); Assert.Contains("SEQUENCE:1", cancel);
+        Assert.Contains("DTSTART:20300506T090000", publish); Assert.Contains("DTEND:20300506T100000", publish);
+        Assert.Contains("Lab\\, part 1\\; ", publish);   // commas and semicolons are escaped
+        Assert.All(publish.Split("\r\n"), line => Assert.True(line.Length <= 75, line));
+        Assert.EndsWith("END:VCALENDAR\r\n", publish);
+    }
 }

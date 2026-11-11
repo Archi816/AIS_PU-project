@@ -19,8 +19,11 @@ public class LemsOptions
 ///   4. LifecycleWorker reconciles anything a crash left behind.
 /// Methods only stage changes in 'ops'; callers call ops.SaveChangesAsync(). Core saves happen inside where noted.
 /// </summary>
-public class Domain(CoreDb core, OpsDb ops)
+public class Domain(CoreDb core, OpsDb ops, IMailQueue? mail = null)
 {
+    // E-mails are staged while a change is prepared and sent to the queue only AFTER the database save succeeded (FlushMail).
+    readonly List<MailItem> outbox = new();
+
     public static string Eq(Equipment e) => $"Equipment {e.Title} (Inventory No.: {e.InventoryNumber}) at {e.Location}";
     public static string When(Booking b) => $"{b.StartTime:dd.MM.yyyy HH:mm}-{b.EndTime:HH:mm}";
 
@@ -31,6 +34,33 @@ public class Domain(CoreDb core, OpsDb ops)
     {
         var ids = await core.Users.Where(u => u.Role == Role.ADMIN).Select(u => u.Id).ToListAsync();
         foreach (var id in ids) Notify(id, message);
+    }
+
+    async Task<User?> MailRecipient(int userId)
+    {
+        if (mail is not { Enabled: true }) return null;
+        var u = await core.Users.AsNoTracking().FirstOrDefaultAsync(x => x.Id == userId);
+        return u is { Role: Role.STUDENT, EmailNotifications: true } ? u : null;   // e-mails go to students who did not switch them off
+    }
+
+    /// <summary>Stages the e-mail for a booking event. wasConfirmed: the booking was CONFIRMED before (a calendar event exists to be removed).</summary>
+    public async Task StageBookingMail(Booking b, Equipment? e, MailKind kind, string? reason = null, bool wasConfirmed = false)
+    {
+        var u = await MailRecipient(b.UserId);
+        if (u != null) outbox.Add(MailTemplates.ForBooking(kind, b, e, u, reason, wasConfirmed, mail!.AppUrl));
+    }
+
+    /// <summary>Stages a simple text e-mail (repair report decisions).</summary>
+    public async Task StageTextMail(int userId, string subject, string message)
+    {
+        var u = await MailRecipient(userId);
+        if (u != null) outbox.Add(MailTemplates.Text(u, subject, message, mail!.AppUrl));
+    }
+
+    public void FlushMail()
+    {
+        if (mail != null) foreach (var m in outbox) mail.Enqueue(m);
+        outbox.Clear();
     }
 
     public void Activity(string message) =>
@@ -45,8 +75,10 @@ public class Domain(CoreDb core, OpsDb ops)
             .ToListAsync();
         foreach (var b in list)
         {
+            var was = b.Status;
             b.Status = BookingStatus.CANCELED;
             Notify(b.UserId, $"Your booking of {e.Title} ({When(b)}) has been canceled: {reason}");
+            await StageBookingMail(b, e, MailKind.Canceled, reason, was == BookingStatus.CONFIRMED);
         }
         return list.Count;
     }

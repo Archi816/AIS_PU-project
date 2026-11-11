@@ -110,17 +110,26 @@ const ICON = {
   check: svg('<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>'),
   clock: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
   list: svg('<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>'),
-  pulse: svg('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>')
+  pulse: svg('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>'),
+  calendar: svg('<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M8 14h2M14 14h2M8 17.5h2"/>'),
+  notifications: svg('<path d="M6 9a6 6 0 0112 0c0 6 2 7 2 7H4s2-1 2-7"/><path d="M10 20a2 2 0 004 0"/>'),
+  profile: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/>'),
+  reports: svg('<path d="M3 3v18h18"/><path d="M8 17v-5M13 17V7M18 17v-8"/>'),
+  help: svg('<circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 015.8 1c0 2-3 2.5-3 4M12 17h.01"/>'),
+  info: svg('<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>')
 };
 const NAV = () => isAdmin()
-  ? [['Main', [['dashboard', 'Dashboard'], ['equipment', 'Equipment'], ['bookings', 'Bookings']]], ['Admin', [['inventory', 'Inventory'], ['repairs', 'Repair Requests'], ['students', 'Students']]]]
-  : [['Main', [['dashboard', 'Dashboard'], ['equipment', 'Equipment'], ['bookings', 'My Bookings'], ['repairs', 'Report Issue']]]];
+  ? [['Main', [['dashboard', 'Dashboard'], ['equipment', 'Equipment'], ['calendar', 'Calendar'], ['bookings', 'Bookings']]],
+     ['Admin', [['inventory', 'Inventory'], ['repairs', 'Repair Requests'], ['students', 'Students'], ['reports', 'Reports']]],
+     ['Account', [['notifications', 'Notifications'], ['profile', 'Profile']]]]
+  : [['Main', [['dashboard', 'Dashboard'], ['equipment', 'Equipment'], ['calendar', 'Calendar'], ['bookings', 'My Bookings'], ['repairs', 'Report Issue']]],
+     ['Account', [['notifications', 'Notifications'], ['profile', 'Profile'], ['help', 'Rules & Help']]]];
 const NAV_ICON = { repairs: () => isAdmin() ? ICON.repairs : ICON.report };
 
 function shell(page) {
   const ini = (user.name[0] + user.surname[0]).toUpperCase();
   const role = isAdmin() ? 'Administrator' : 'Student';
-  const link = ([k, t]) => `<a href="#/${k}" class="${k === page ? 'active' : ''}">${(NAV_ICON[k] ? NAV_ICON[k]() : ICON[k])}<span>${t}</span></a>`;
+  const link = ([k, t]) => `<a href="#/${k}" class="${k === page ? 'active' : ''}">${(NAV_ICON[k] ? NAV_ICON[k]() : ICON[k])}<span>${esc(t)}</span></a>`;
   $app.innerHTML = `<div class="shell">
     <aside class="side" id="side">
       <a class="brand" href="#/dashboard"><img class="logo" src="logo.svg?v=5" alt=""><b>LEMS<i>.</i></b></a>
@@ -165,6 +174,7 @@ async function loadNotes(markRead) {
     document.getElementById('notes').innerHTML = d.items.length
       ? d.items.map(n => `<div class="it note ${n.isRead ? '' : 'unread'}">${esc(n.message)}<small>${fmt(n.createdAt)}</small></div>`).join('')
       : '<div class="it empty">No notifications</div>';
+    document.getElementById('notes').insertAdjacentHTML('beforeend', '<div class="it"><a href="#/notifications">View all notifications</a></div>');
     if (markRead && d.unread) { await api('/notifications/read-all', 'POST'); b.hidden = true; }
   } catch { }
 }
@@ -172,12 +182,12 @@ async function loadNotes(markRead) {
 
 
 /* ---------- router ---------- */
-const ADMIN_ONLY = ['inventory', 'students'];
+const ADMIN_ONLY = ['inventory', 'students', 'reports'], STUDENT_ONLY = ['help'];
 async function route() {
   if (!user) { try { user = await api('/auth/me'); } catch { if (!$app.querySelector('.auth')) showAuth('login'); return; } }
-  const pages = { dashboard, equipment, bookings, repairs, inventory, students };
+  const pages = { dashboard, equipment, calendar, bookings, repairs, inventory, students, reports, notifications, profile, help };
   let page = (location.hash.replace('#/', '') || 'dashboard').split('?')[0];
-  if (!pages[page] || (ADMIN_ONLY.includes(page) && !isAdmin())) page = 'dashboard';
+  if (!pages[page] || (ADMIN_ONLY.includes(page) && !isAdmin()) || (STUDENT_ONLY.includes(page) && isAdmin())) page = 'dashboard';
   clearTimers(); shell(page);
   const view = document.getElementById('view');
   view.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
@@ -199,7 +209,7 @@ async function dashboard(view) {
     const rows = sc.equipment, hours = rows[0]?.slots.map(s => s.hour) ?? [];
     const eq = d.equipment, pct = eq.total ? Math.round(eq.available * 100 / eq.total) : 0;
     const bookedSlots = rows.reduce((n, r) => n + r.slots.filter(s => s.state === 'taken' || s.state === 'mine').length, 0);
-    const today = ymd(new Date()), last = addDays(today, BOOK_AHEAD_DAYS);
+    const today = ymd(new Date()), last = addDays(today, sc.maxDaysAhead ?? BOOK_AHEAD_DAYS);
     const stat = (title, n, sub, cls, ico) => `<div class="card stat ${cls}"><div class="top-row"><span class="l">${title}</span><span class="chip">${ico}</span></div><div class="n">${n}</div><div class="d ${cls}">${sub}</div></div>`;
 
     /* schedule: first 5 pieces of equipment, the rest behind a button */
@@ -301,7 +311,7 @@ async function equipment(view) {
     const byId = Object.fromEntries(d.items.map(e => [e.id, e]));
     view.querySelectorAll('[data-act]').forEach(b => b.onclick = () => {
       const e = byId[b.dataset.id];
-      ({ book: () => bookModal(e, draw), report: () => reportModal(e), edit: () => equipmentForm(e, draw), del: () => deleteFlow(e, draw) })[b.dataset.act]();
+      ({ info: () => infoModal(e, draw), book: () => bookModal(e, draw), report: () => reportModal(e), edit: () => equipmentForm(e, draw), del: () => deleteFlow(e, draw) })[b.dataset.act]();
     });
   };
   await draw();
@@ -339,7 +349,7 @@ function card(e) {
     : `<button class="btn primary" data-act="book" data-id="${e.id}" ${maint ? 'disabled title="Equipment is under maintenance"' : ''}>Book</button><button class="btn" data-act="report" data-id="${e.id}">Report Issue</button>`;
   return `<div class="card eq st-${e.status}"><div class="thumb">${thumb(e)}</div><h3>${esc(e.title)}</h3>
     <div class="meta">Inv. No.: ${esc(e.inventoryNumber)}</div><div class="meta">${esc(e.location)} · ${esc(e.category)}</div>
-    <div class="row">${badge(e.status)}</div><div class="acts">${acts}</div></div>`;
+    <div class="row">${badge(e.status)}<span class="grow"></span><button class="btn icon sm" data-act="info" data-id="${e.id}" aria-label="Details of ${esc(e.title)}" title="Details">${ICON.info}</button></div><div class="acts">${acts}</div></div>`;
 }
 
 /* opts.start: ISO start of a slot to pre-select (used by the dashboard schedule) */
@@ -424,11 +434,13 @@ async function reportModal(e, refresh) {
 
 
 function equipmentForm(e, refresh) {
-  const v = e || { inventoryNumber: '', title: '', description: '', location: '', category: '', status: 'AVAILABLE' };
+  const v = e || { inventoryNumber: '', title: '', description: '', location: '', category: '', status: 'AVAILABLE', specifications: '', contactName: '', contactEmail: '' };
   const f = (id, lbl, val, max) => `<label>${lbl}</label><input id="f-${id}" maxlength="${max}" value="${esc(val)}"><div id="e-${id}"></div>`;
   modal(`<h2>${e ? 'Edit equipment' : 'Add equipment'}</h2>
     ${f('inventoryNumber', 'Inventory number', v.inventoryNumber, 10)}${f('title', 'Title', v.title, 25)}${f('category', 'Category', v.category, 30)}${f('location', 'Location', v.location, 20)}
     <label>Description</label><textarea id="f-description" rows="3" maxlength="250">${esc(v.description)}</textarea><div id="e-description"></div>
+    <label>Specifications (optional)</label><textarea id="f-specifications" rows="4" maxlength="1000" placeholder="One per line, e.g. Power: 230 V">${esc(v.specifications)}</textarea><div id="e-specifications"></div>
+    ${f('contactName', 'Responsible person (optional)', v.contactName, 50)}${f('contactEmail', 'Contact e-mail (optional)', v.contactEmail, 100)}
     ${e ? `<label>Status</label>${v.status === 'RESERVED'
       ? '<input value="Reserved (in use right now - managed automatically)" disabled>'
       : `<select id="f-status"><option value="AVAILABLE" ${v.status === 'AVAILABLE' ? 'selected' : ''}>Available</option><option value="MAINTENANCE" ${v.status === 'MAINTENANCE' ? 'selected' : ''}>Maintenance (cancels pending & confirmed bookings)</option></select>`}` : ''}
@@ -447,7 +459,7 @@ function equipmentForm(e, refresh) {
     if (rm) rm.onclick = () => { removePhoto = true; m.querySelector('#f-photo').value = ''; m.querySelector('#prev').innerHTML = equipmentArt(v); rm.remove(); };
     m.querySelector('#ok').onclick = async () => {
       const g = id => m.querySelector('#f-' + id)?.value;
-      const body = { inventoryNumber: g('inventoryNumber'), title: g('title'), category: g('category'), location: g('location'), description: g('description'), status: g('status') ?? v.status };
+      const body = { inventoryNumber: g('inventoryNumber'), title: g('title'), category: g('category'), location: g('location'), description: g('description'), specifications: g('specifications'), contactName: g('contactName'), contactEmail: g('contactEmail'), status: g('status') ?? v.status };
       if (e && body.status === 'MAINTENANCE' && v.status !== 'MAINTENANCE' && !(await confirmBox('Place under maintenance?', 'All pending and confirmed bookings of this equipment will be canceled and students notified.', 'Continue', true))) return;
       try {
         const saved = await api(e ? `/equipment/${e.id}` : '/equipment', e ? 'PUT' : 'POST', body);
@@ -460,7 +472,7 @@ function equipmentForm(e, refresh) {
         close(); toast(photoError ? `Saved, but the photo failed: ${photoError}` : (e ? 'Equipment updated' : 'Equipment created'), !!photoError); refresh();
       } catch (er) {
         if (er.handled) return;   // form stays open with its data (BR-EQ-C-05)
-        ['inventoryNumber', 'title', 'category', 'location', 'description'].forEach(k => m.querySelector('#e-' + k).innerHTML = fieldErr(er.fields, k));
+        ['inventoryNumber', 'title', 'category', 'location', 'description', 'specifications', 'contactName', 'contactEmail'].forEach(k => m.querySelector('#e-' + k).innerHTML = fieldErr(er.fields, k));
         m.querySelector('#e-gen').innerHTML = Object.keys(er.fields).length ? '' : `<div class="alert">${esc(er.message)}</div>`;
       }
     };
@@ -527,6 +539,14 @@ async function students(view) {
   document.getElementById('sq').oninput = render; render();
 }
 
+/* approve / reject / cancel a booking (used by the bookings page and the calendar) */
+async function bookingAction(a, id) {
+  if (a === 'cancel' && !(await confirmBox('Cancel booking?', 'The time slot will be released.', 'Cancel booking', true))) return false;
+  try { await api(`/bookings/${id}/${a}`, 'POST'); toast({ approve: 'Booking confirmed', reject: 'Booking rejected', cancel: 'Booking canceled' }[a]); }
+  catch (er) { if (!er.handled) toast(er.message, true); }
+  return true;
+}
+
 /* ---------- bookings ---------- */
 async function bookings(view) {
   let filter = '';
@@ -542,13 +562,7 @@ async function bookings(view) {
         <td><div class="acts-cell">${b.canDecide ? `<button class="btn sm primary" data-a="approve" data-id="${b.id}">Approve</button><button class="btn sm danger" data-a="reject" data-id="${b.id}">Reject</button>` : ''}
         ${b.canCancel ? `<button class="btn sm" data-a="cancel" data-id="${b.id}">Cancel</button>` : ''}</div></td></tr>`).join('')}</tbody></table>` : '<div class="empty"><b>No bookings</b>Nothing matches this filter.</div>'}</div>`;
     document.getElementById('flt').onchange = e => { filter = e.target.value; draw(); };
-    view.querySelectorAll('[data-a]').forEach(btn => btn.onclick = async () => {
-      const a = btn.dataset.a;
-      if (a === 'cancel' && !(await confirmBox('Cancel booking?', 'The time slot will be released.', 'Cancel booking', true))) return;
-      try { await api(`/bookings/${btn.dataset.id}/${a}`, 'POST'); toast({ approve: 'Booking confirmed', reject: 'Booking rejected', cancel: 'Booking canceled' }[a]); }
-      catch (er) { if (!er.handled) toast(er.message, true); }
-      draw();
-    });
+    view.querySelectorAll('[data-a]').forEach(btn => btn.onclick = async () => { await bookingAction(btn.dataset.a, btn.dataset.id); draw(); });
   };
   await draw(); timers.push(setInterval(() => { if (!document.querySelector('.ov')) draw().catch(() => { }); }, 15000));
 }
@@ -610,6 +624,187 @@ async function repairs(view) {
     });
   };
   await draw(); timers.push(setInterval(() => { if (!document.querySelector('.ov')) draw().catch(() => { }); }, 15000));
+}
+
+
+
+/* ---------- equipment details dialog (description, specifications, responsible person) ---------- */
+function infoModal(e, refresh) {
+  const mail = e.contactEmail
+    ? `<a href="mailto:${esc(e.contactEmail)}?subject=${encodeURIComponent('Question about ' + e.inventoryNumber)}">${esc(e.contactName || e.contactEmail)}</a>${e.contactName ? `<small>${esc(e.contactEmail)}</small>` : ''}`
+    : (e.contactName ? esc(e.contactName) : '<span class="muted">Not specified</span>');
+  const row = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
+  modal(`<h2>${esc(e.title)}</h2><div class="kvhead">${badge(e.status)}<span class="sub" style="margin:0">Inventory No.: ${esc(e.inventoryNumber)}</span></div>
+    <div class="thumb info-thumb">${thumb(e)}</div>
+    <dl class="kv">${row('Description', e.description ? esc(e.description) : '<span class="muted">-</span>')}
+      ${row('Specifications', e.specifications ? `<div class="pre">${esc(e.specifications)}</div>` : '<span class="muted">Not specified</span>')}
+      ${row('Location', esc(e.location))}${row('Category', esc(e.category))}${row('Responsible', mail)}</dl>
+    <div class="foot"><button class="btn" id="cx">Close</button>
+      ${isAdmin() ? '' : `<button class="btn primary" id="bk" ${e.status === 'MAINTENANCE' ? 'disabled' : ''}>Book</button>`}</div>`, (m, close) => {
+    m.querySelector('#cx').onclick = close;
+    const bk = m.querySelector('#bk'); if (bk) bk.onclick = () => { close(); bookModal(e, refresh); };
+  });
+}
+
+/* ---------- calendar: week view ---------- */
+const CAL_FIRST = 8, CAL_LAST = 20;   // hours shown (the default lab hours)
+const mondayOf = iso => { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return ymd(d); };
+let calState = { week: mondayOf(ymd(new Date())), eq: '' };
+
+function bookingModal(b, onDone) {
+  const row = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
+  modal(`<h2>${esc(b.equipmentTitle)}</h2><div class="kvhead">${badge(b.status)}<span class="sub" style="margin:0">${esc(b.inventoryNumber)} · ${esc(b.location)}</span></div>
+    <dl class="kv">${row('When', `${fmt(b.start)}–${fmtT(b.end)}`)}${isAdmin() ? row('Student', `${esc(b.studentName)}<small>${esc(b.studentEmail)}</small>`) : ''}${row('Purpose', esc(b.description))}</dl>
+    <div class="foot"><button class="btn" id="cx">Close</button>
+      ${b.canCancel ? '<button class="btn danger" data-a="cancel">Cancel booking</button>' : ''}
+      ${b.canDecide ? '<button class="btn danger" data-a="reject">Reject</button><button class="btn primary" data-a="approve">Approve</button>' : ''}</div>`, (m, close) => {
+    m.querySelector('#cx').onclick = close;
+    m.querySelectorAll('[data-a]').forEach(btn => btn.onclick = async () => { close(); await bookingAction(btn.dataset.a, b.id); onDone(); });
+  });
+}
+
+async function calendar(view) {
+  const draw = async () => {
+    let list; try { list = await api('/bookings'); } catch (e) { if (!e.handled) loadFailed(view); return; }
+    list = list.filter(b => b.status !== 'REJECTED' && b.status !== 'CANCELED');
+    const eqs = [...new Map(list.map(b => [String(b.equipmentId), b.equipmentTitle]))].sort((a, b) => a[1].localeCompare(b[1]));
+    const days = Array.from({ length: 7 }, (_, i) => addDays(calState.week, i)), today = ymd(new Date());
+    const shown = list.filter(b => (!calState.eq || String(b.equipmentId) === calState.eq) && days.includes(b.start.slice(0, 10)));
+    const hours = Array.from({ length: CAL_LAST - CAL_FIRST }, (_, i) => CAL_FIRST + i);
+    const dayName = d => new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short' });
+    const range = `${new Date(days[0] + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} – ${new Date(days[6] + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+    const cell = (d, h) => `<div class="cal-c ${d === today ? 'today' : ''}">${shown.filter(b => b.start.slice(0, 10) === d && Number(b.start.slice(11, 13)) === h)
+      .map(b => `<button class="chip s-${b.status.toLowerCase()}" data-b="${b.id}" title="${esc(b.equipmentTitle)} - ${label(b.status)}">${esc(b.equipmentTitle)}${isAdmin() ? `<small>${esc(b.studentName)}</small>` : ''}</button>`).join('')}</div>`;
+    view.innerHTML = `<div class="page-head"><div><h1>Calendar</h1><p class="sub">${isAdmin() ? 'Bookings of all equipment' : 'Your bookings'} · ${range}</p></div>
+      <div class="tools">${isAdmin() || eqs.length > 1 ? `<select id="cal-eq" style="width:200px"><option value="">All equipment</option>${eqs.map(([id, t]) => `<option value="${esc(id)}" ${calState.eq === id ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>` : ''}
+        <div class="datenav"><button class="btn icon" id="c-prev" aria-label="Previous week">${ICON.left}</button><button class="btn" id="c-today">Today</button><button class="btn icon" id="c-next" aria-label="Next week">${ICON.right}</button></div></div></div>
+      <div class="card"><div class="card-h"><div class="legend"><span><i class="l-pending"></i>Pending</span><span><i class="l-confirmed"></i>Confirmed</span><span><i class="l-in_progress"></i>In progress</span><span><i class="l-finished"></i>Finished</span></div>
+        <div class="right"><small>${shown.length} booking${shown.length === 1 ? '' : 's'} this week</small></div></div>
+        <div class="cal-scroll"><div class="cal"><div class="cal-h"></div>${days.map(d => `<div class="cal-h ${d === today ? 'today' : ''}"><span>${dayName(d)}</span><b>${Number(d.slice(8))}</b></div>`).join('')}
+          ${hours.map(h => `<div class="cal-t">${hh(h)}:00</div>${days.map(d => cell(d, h)).join('')}`).join('')}</div></div></div>`;
+    const go = w => { calState.week = w; draw(); };
+    document.getElementById('c-prev').onclick = () => go(addDays(calState.week, -7));
+    document.getElementById('c-next').onclick = () => go(addDays(calState.week, 7));
+    document.getElementById('c-today').onclick = () => go(mondayOf(today));
+    document.getElementById('cal-eq')?.addEventListener('change', ev => { calState.eq = ev.target.value; draw(); });
+    const byId = Object.fromEntries(shown.map(b => [b.id, b]));
+    view.querySelectorAll('[data-b]').forEach(c => c.onclick = () => bookingModal(byId[c.dataset.b], draw));
+  };
+  await draw(); timers.push(setInterval(() => { if (!document.querySelector('.ov')) draw().catch(() => { }); }, 20000));
+}
+
+/* ---------- notifications: full history ---------- */
+let notesPage = 1;
+async function notifications(view) {
+  const draw = async () => {
+    let d; try { d = await api(`/notifications?page=${notesPage}&pageSize=15`); } catch (e) { if (!e.handled) loadFailed(view); return; }
+    const pages = Math.max(1, Math.ceil(d.total / d.pageSize));
+    view.innerHTML = `<div class="page-head"><div><h1>Notifications</h1><p class="sub">${d.total} message${d.total === 1 ? '' : 's'}, ${d.unread} unread.${isAdmin() ? '' : (user.emailNotifications ? ' A copy of booking messages is also sent to your e-mail.' : ' E-mail copies are switched off in your profile.')}</p></div>
+      <div class="tools"><button class="btn" id="read-all" ${d.unread ? '' : 'disabled'}>Mark all as read</button></div></div>
+      <div class="card">${d.items.length ? d.items.map(n => `<div class="nrow ${n.isRead ? '' : 'unread'}"><span class="dot" aria-hidden="true"></span><div>${esc(n.message)}<small>${fmt(n.createdAt)}</small></div></div>`).join('')
+        : '<div class="empty"><b>No notifications yet</b>Decisions on your bookings and repair reports appear here.</div>'}</div>
+      <div class="pager"><span>Showing ${d.items.length} of ${d.total}</span><div><button class="btn sm" id="prev" ${d.page <= 1 ? 'disabled' : ''}>‹ Prev</button><span>Page ${d.page} / ${pages}</span><button class="btn sm" id="next" ${d.page >= pages ? 'disabled' : ''}>Next ›</button></div></div>`;
+    document.getElementById('read-all').onclick = async () => { await api('/notifications/read-all', 'POST'); loadNotes(false); draw(); };
+    document.getElementById('prev').onclick = () => { notesPage--; draw(); };
+    document.getElementById('next').onclick = () => { notesPage++; draw(); };
+  };
+  notesPage = 1; await draw();
+}
+
+/* ---------- profile ---------- */
+async function profile(view) {
+  view.innerHTML = `<div class="page-head"><div><h1>Profile</h1><p class="sub">Your account, notifications and password.</p></div></div>
+    <div class="grid g2" style="align-items:start">
+      <div class="card pad"><h2>Account</h2>
+        <label for="p-name">Name</label><input id="p-name" maxlength="50" value="${esc(user.name)}"><div id="e-name"></div>
+        <label for="p-surname">Surname</label><input id="p-surname" maxlength="50" value="${esc(user.surname)}"><div id="e-surname"></div>
+        <label>E-mail</label><input value="${esc(user.email)}" disabled>
+        <label>Role</label><input value="${isAdmin() ? 'Administrator' : 'Student'}" disabled>
+        ${isAdmin() ? '' : `<label class="switch-row"><span class="switch"><input type="checkbox" id="p-mail" ${user.emailNotifications ? 'checked' : ''}><i></i></span><span><b>E-mail notifications</b><small>Receive booking confirmations and changes by e-mail, with a calendar file for confirmed bookings.</small></span></label>`}
+        <div id="p-msg"></div><div class="foot"><button class="btn primary" id="p-save">Save changes</button></div></div>
+      <div class="card pad"><h2>Change password</h2>
+        <label for="pw-cur">Current password</label><input id="pw-cur" type="password" autocomplete="current-password"><div id="e-currentPassword"></div>
+        <label for="pw-new">New password</label><input id="pw-new" type="password" autocomplete="new-password"><div id="e-newPassword"></div>
+        <label for="pw-cfm">Confirm new password</label><input id="pw-cfm" type="password" autocomplete="new-password"><div id="e-confirmPassword"></div>
+        <div id="pw-msg"></div><p class="sub" style="margin-top:12px">At least 8 characters with a letter and a digit. You will stay signed in here; other devices are signed out.</p>
+        <div class="foot"><button class="btn primary" id="pw-save">Change password</button></div></div></div>`;
+  const val = id => document.getElementById(id).value, set = (id, h) => { document.getElementById(id).innerHTML = h; };
+  document.getElementById('p-save').onclick = async () => {
+    ['e-name', 'e-surname', 'p-msg'].forEach(i => set(i, ''));
+    try {
+      user = await api('/profile', 'PUT', { name: val('p-name'), surname: val('p-surname'), emailNotifications: isAdmin() ? undefined : document.getElementById('p-mail').checked });
+      toast('Profile saved'); route();
+    } catch (er) {
+      if (er.handled) return;
+      set('e-name', fieldErr(er.fields, 'name')); set('e-surname', fieldErr(er.fields, 'surname'));
+      if (!Object.keys(er.fields).length) set('p-msg', `<div class="alert">${esc(er.message)}</div>`);
+    }
+  };
+  document.getElementById('pw-save').onclick = async () => {
+    ['e-currentPassword', 'e-newPassword', 'e-confirmPassword', 'pw-msg'].forEach(i => set(i, ''));
+    try {
+      await api('/profile/password', 'POST', { currentPassword: val('pw-cur'), newPassword: val('pw-new'), confirmPassword: val('pw-cfm') });
+      ['pw-cur', 'pw-new', 'pw-cfm'].forEach(i => { document.getElementById(i).value = ''; });
+      toast('Password changed');
+    } catch (er) {
+      if (er.handled) return;
+      ['currentPassword', 'newPassword', 'confirmPassword'].forEach(k => set('e-' + k, fieldErr(er.fields, k)));
+      if (!Object.keys(er.fields).length) set('pw-msg', `<div class="alert">${esc(er.message)}</div>`);
+    }
+  };
+}
+
+/* ---------- reports (admin) ---------- */
+let repDays = 30;
+async function reports(view) {
+  const draw = async () => {
+    let r; try { r = await api('/reports?days=' + repDays); } catch (e) { if (!e.handled) loadFailed(view); return; }
+    const maxDay = Math.max(1, ...r.perDay.map(x => x.total)), maxHours = Math.max(1, ...r.utilization.map(x => x.usedHours));
+    const stat = (l, n, sub, ico) => `<div class="card stat"><div class="top-row"><span class="l">${l}</span><span class="chip">${ico}</span></div><div class="n">${n}</div><div class="d">${sub}</div></div>`;
+    const step = Math.max(1, Math.ceil(r.perDay.length / 6));
+    const short = d => new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    view.innerHTML = `<div class="page-head"><div><h1>Reports</h1><p class="sub">${short(r.fromDate)} – ${short(r.toDate)} · equipment usage and faults</p></div>
+      <div class="tools"><select id="rep-days" style="width:170px">${[7, 30, 90].map(n => `<option value="${n}" ${n === repDays ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select></div></div>
+      <div class="grid g4">${stat('Bookings', r.totals.bookings, 'started in this period', ICON.bookings)}${stat('Booked hours', r.totals.usedHours, 'confirmed, in progress or finished', ICON.clock)}
+        ${stat('Utilization', r.totals.utilizationPercent + '%', 'of all bookable hours', ICON.pulse)}${stat('Repair reports', r.totals.repairs, `${r.totals.confirmedRepairs} confirmed`, ICON.repairs)}</div>
+      <div class="card sect"><div class="card-h">${ICON.pulse}<div class="ttl"><h2>Bookings per day</h2><small>All requests and the part that was actually used.</small></div>
+        <div class="right legend"><span><i class="l-total"></i>Requested</span><span><i class="l-used"></i>Used</span></div></div>
+        <div class="bars" role="img" aria-label="Bookings per day">${r.perDay.map((x, i) => `<div class="bar" title="${short(x.date)}: ${x.total} requested, ${x.used} used"><div class="bar-t" style="height:${Math.round(x.total * 100 / maxDay)}%"><div class="bar-u" style="height:${x.total ? Math.round(x.used * 100 / x.total) : 0}%"></div></div><span>${i % step === 0 ? short(x.date) : ''}</span></div>`).join('')}</div></div>
+      <div class="grid g2 sect" style="align-items:start">
+        <div class="card"><div class="card-h">${ICON.equipment}<div class="ttl"><h2>Equipment utilization</h2><small>Booked hours per piece of equipment.</small></div></div>
+          ${r.utilization.length ? r.utilization.slice(0, 10).map(u => `<div class="urow"><div class="un"><b>${esc(u.title)}</b><small>${esc(u.inventoryNumber)}</small></div><div class="ubar"><i style="width:${Math.round(u.usedHours * 100 / maxHours)}%"></i></div><span class="uv">${u.usedHours} h · ${u.percent}%</span></div>`).join('') : '<div class="empty"><b>No equipment</b></div>'}</div>
+        <div class="card"><div class="card-h">${ICON.repairs}<div class="ttl"><h2>Most frequent faults</h2><small>Equipment with the most problem reports.</small></div></div>
+          ${r.faults.length ? `<div class="tbl"><table><thead><tr><th>Equipment</th><th>Reports</th><th>Confirmed</th><th>Last report</th></tr></thead><tbody>${r.faults.map(f => `<tr><td><span class="nm">${esc(f.title)}</span><small>${esc(f.inventoryNumber)}</small></td><td>${f.reports}</td><td>${f.confirmed}</td><td>${fmtShort(f.lastReport)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty"><b>No problem reports</b>Nothing was reported in this period.</div>'}</div></div>
+      <div class="card sect"><div class="card-h">${ICON.list}<div class="ttl"><h2>Bookings by status</h2></div></div>
+        <div class="statusrow">${r.byStatus.length ? r.byStatus.map(s => `<div>${badge(s.status)}<b>${s.count}</b></div>`).join('') : '<span class="muted">No bookings in this period.</span>'}</div></div>`;
+    document.getElementById('rep-days').onchange = e => { repDays = Number(e.target.value); draw(); };
+  };
+  await draw();
+}
+
+/* ---------- rules & help (students) ---------- */
+async function help(view) {
+  let sc, eq;
+  try { [sc, eq] = await Promise.all([api('/schedule'), api('/equipment?pageSize=60&sort=name')]); } catch (e) { if (!e.handled) loadFailed(view); return; }
+  const contacts = eq.items.filter(e => e.contactName || e.contactEmail);
+  view.innerHTML = `<div class="page-head"><div><h1>Rules &amp; Help</h1><p class="sub">How booking works and whom to contact.</p></div></div>
+    <div class="grid g2" style="align-items:start">
+      <div class="card pad"><h2>Booking rules</h2><ul class="rules">
+        <li>A booking is <b>one hour</b> long. Slots start on the hour between <b>${hh(sc.openHour)}:00</b> and <b>${hh(sc.closeHour)}:00</b>.</li>
+        <li>You can book at most <b>${sc.maxDaysAhead} days</b> ahead, and only a slot that has not started yet.</li>
+        <li>A new request is <b>pending</b>: the slot is held for you until an administrator confirms or rejects it.</li>
+        <li>A request without a decision is canceled automatically after <b>${sc.pendingTimeoutHours} hours</b>, or when its start time is reached.</li>
+        <li>You can cancel a pending or confirmed booking until it starts.</li>
+        <li>Equipment under maintenance cannot be booked. If it is placed under maintenance, its pending and confirmed bookings are canceled and you are notified.</li>
+        <li>Found a fault? Use <a href="#/repairs">Report Issue</a> and describe the problem in English.</li></ul></div>
+      <div class="card pad"><h2>E-mail and calendar</h2><ul class="rules">
+        <li>You get an e-mail when a request is received, confirmed, rejected or canceled.</li>
+        <li>A confirmed booking comes with a calendar file (.ics) and an <b>Add to Google Calendar</b> link. A canceled booking removes the event again.</li>
+        <li>Switch e-mails on or off in your <a href="#/profile">profile</a>. Notifications inside LEMS always stay available under <a href="#/notifications">Notifications</a>.</li></ul></div></div>
+    <div class="card sect"><div class="card-h">${ICON.students}<div class="ttl"><h2>Who to contact</h2><small>Persons responsible for the equipment.</small></div></div>
+      ${contacts.length ? `<div class="tbl"><table><thead><tr><th>Equipment</th><th>Responsible</th><th>E-mail</th></tr></thead><tbody>${contacts.map(e => `<tr><td><span class="nm">${esc(e.title)}</span><small>${esc(e.inventoryNumber)} · ${esc(e.location)}</small></td><td>${esc(e.contactName) || '-'}</td>
+        <td>${e.contactEmail ? `<a href="mailto:${esc(e.contactEmail)}?subject=${encodeURIComponent('Question about ' + e.inventoryNumber)}">${esc(e.contactEmail)}</a>` : '-'}</td></tr>`).join('')}</tbody></table></div>`
+        : '<div class="empty"><b>No contacts yet</b>An administrator can add a responsible person to each piece of equipment.</div>'}</div>`;
 }
 
 

@@ -7,7 +7,10 @@ namespace Lems;
 
 public record LoginReq(string? Email, string? Password);
 public record RegisterReq(string? Email, string? Password, string? ConfirmPassword);
-public record EquipmentReq(string? InventoryNumber, string? Title, string? Description, string? Location, string? Category, string? Status);
+public record EquipmentReq(string? InventoryNumber, string? Title, string? Description, string? Location, string? Category, string? Status,
+    string? Specifications = null, string? ContactName = null, string? ContactEmail = null);
+public record ProfileReq(string? Name, string? Surname, bool? EmailNotifications);
+public record PasswordReq(string? CurrentPassword, string? NewPassword, string? ConfirmPassword);
 public record BookingReq(int EquipmentId, DateTime? Start, string? Description);
 public record RepairReq(int EquipmentId, string? Title, string? Description);
 public record CompleteReq(bool Working);
@@ -16,6 +19,8 @@ public record CompleteReq(bool Working);
 public static class Api
 {
     static readonly SemaphoreSlim BookLock = new(1, 1);
+    static readonly Regex AnyEmail = new(@"^[^@\s]+@[^@\s]+\.[^@\s]+$", RegexOptions.Compiled);
+    static readonly Regex PersonName = new(@"^\p{L}[\p{L} '\-]*$", RegexOptions.Compiled);
     static readonly Regex StudentEmail = new(@"^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*@student\.tuke\.sk$", RegexOptions.Compiled);
 
     // ---------- helpers ----------
@@ -45,11 +50,12 @@ public static class Api
         return await core.Users.Where(u => list.Contains(u.Id)).ToDictionaryAsync(u => u.Id);
     }
 
-    static object UserDto(User u) => new { u.Id, u.Name, u.Surname, u.Email, role = u.Role };
+    static object UserDto(User u) => new { u.Id, u.Name, u.Surname, u.Email, role = u.Role, emailNotifications = u.EmailNotifications };
 
     static object EqDto(Equipment e, DateTime? imageUpdated = null) => new
     {
         e.Id, inventoryNumber = e.InventoryNumber, e.Title, e.Description, e.Location, e.Category, e.Status, createdAt = e.CreatedAt,
+        specifications = e.Specifications, contactName = e.ContactName, contactEmail = e.ContactEmail,
         hasImage = imageUpdated != null, imageVersion = imageUpdated?.Ticks ?? 0L
     };
 
@@ -85,6 +91,11 @@ public static class Api
         if (loc.Length == 0 || loc.Length > 20) e["location"] = "Required, max 20 characters";
         if (cat.Length == 0 || cat.Length > 30) e["category"] = "Required, max 30 characters";
         if ((r.Description?.Length ?? 0) > 250) e["description"] = "Max 250 characters";
+        if ((r.Specifications?.Trim().Length ?? 0) > 1000) e["specifications"] = "Max 1000 characters";
+        var cn = r.ContactName?.Trim() ?? "";
+        var ce = r.ContactEmail?.Trim() ?? "";
+        if (cn.Length > 50) e["contactName"] = "Max 50 characters";
+        if (ce.Length > 100 || (ce.Length > 0 && !AnyEmail.IsMatch(ce))) e["contactEmail"] = "Enter a valid e-mail address (max 100 characters)";
         return e;
     }
 
@@ -126,6 +137,10 @@ public static class Api
         api.MapPost("/repairs/{id:int}/analyze", AnalyzeRepair);
 
         api.MapGet("/students", ListStudents);
+        api.MapGet("/reports", Reports);
+
+        api.MapPut("/profile", UpdateProfile);
+        api.MapPost("/profile/password", ChangePassword);
 
         api.MapGet("/notifications", ListNotifications);
         api.MapPost("/notifications/read-all", ReadAll);
@@ -304,7 +319,8 @@ public static class Api
         var eq = new Equipment
         {
             InventoryNumber = inv, Title = req.Title!.Trim(), Description = req.Description?.Trim() ?? "",
-            Location = req.Location!.Trim(), Category = req.Category!.Trim(), Status = EquipmentStatus.AVAILABLE
+            Location = req.Location!.Trim(), Category = req.Category!.Trim(), Status = EquipmentStatus.AVAILABLE,
+            Specifications = req.Specifications?.Trim() ?? "", ContactName = req.ContactName?.Trim() ?? "", ContactEmail = req.ContactEmail?.Trim() ?? ""
         };
         core.Equipment.Add(eq);
         var fail = await TrySave(core);
@@ -314,7 +330,7 @@ public static class Api
         return Results.Ok(EqDto(eq));
     }
 
-    static async Task<IResult> UpdateEquipment(int id, EquipmentReq req, HttpContext http, CoreDb core, OpsDb ops)
+    static async Task<IResult> UpdateEquipment(int id, EquipmentReq req, HttpContext http, CoreDb core, OpsDb ops, IMailQueue mail)
     {
         var me = Security.Current(http);
         if (me == null) return Unauth();
@@ -327,7 +343,7 @@ public static class Api
         if (await core.Equipment.AnyAsync(e => e.InventoryNumber == inv && e.Id != id))
             return Err(409, "Duplicate inventory number", new { inventoryNumber = "Inventory number already exists" });
 
-        var d = new Domain(core, ops);
+        var d = new Domain(core, ops, mail);
         var changed = new List<string>();
         void Set(string name, string oldV, string newV, Action<string> apply)
         {
@@ -338,6 +354,9 @@ public static class Api
         Set("description", eq.Description, req.Description?.Trim() ?? "", v => eq.Description = v);
         Set("location", eq.Location, req.Location!.Trim(), v => eq.Location = v);
         Set("category", eq.Category, req.Category!.Trim(), v => eq.Category = v);
+        Set("specifications", eq.Specifications, req.Specifications?.Trim() ?? "", v => eq.Specifications = v);
+        Set("contact name", eq.ContactName, req.ContactName?.Trim() ?? "", v => eq.ContactName = v);
+        Set("contact e-mail", eq.ContactEmail, req.ContactEmail?.Trim() ?? "", v => eq.ContactEmail = v);
 
         try
         {
@@ -358,18 +377,19 @@ public static class Api
         // Ops: cancellations, notifications, events. If this fails the admin can repeat the action (idempotent).
         var fail = await TrySave(ops);
         if (fail != null) return fail;
+        d.FlushMail();   // e-mails about bookings canceled by the maintenance switch
         var img = await core.EquipmentImages.AsNoTracking().Where(i => i.EquipmentId == id).Select(i => (DateTime?)i.UpdatedAt).FirstOrDefaultAsync();
         return Results.Ok(EqDto(eq, img));
     }
 
-    static async Task<IResult> DeleteEquipment(int id, HttpContext http, CoreDb core, OpsDb ops)
+    static async Task<IResult> DeleteEquipment(int id, HttpContext http, CoreDb core, OpsDb ops, IMailQueue mail)
     {
         var me = Security.Current(http);
         if (me == null) return Unauth();
         if (me.Role != Role.ADMIN) return Forbidden();
         var eq = await core.Equipment.FindAsync(id);
         if (eq == null) return NotFound("Equipment");
-        var d = new Domain(core, ops);
+        var d = new Domain(core, ops, mail);
 
         // BR-EQ-D-02: no blocking checks. Students with live bookings are only informed.
         var live = await ops.Bookings.Where(b => b.EquipmentId == id &&
@@ -386,9 +406,13 @@ public static class Api
         try
         {
             foreach (var b in live)
+            {
                 d.Notify(b.UserId, $"Your booking of {eq.Title} ({Domain.When(b)}) was canceled because the equipment was removed from the inventory.");
+                await d.StageBookingMail(b, eq, MailKind.Canceled, "the equipment was removed from the inventory", b.Status == BookingStatus.CONFIRMED);
+            }
             d.Activity($"Equipment {eq.Title} (Inventory No.: {eq.InventoryNumber}) has been removed from the laboratory inventory at {eq.Location}.");
             await ops.SaveChangesAsync();
+            d.FlushMail();
             await ops.Bookings.Where(b => b.EquipmentId == id).ExecuteDeleteAsync();
             await ops.RepairRequests.Where(r => r.EquipmentId == id).ExecuteDeleteAsync();
         }
@@ -497,10 +521,10 @@ public static class Api
         if (me == null) return Unauth();
         var day = DateOnly.FromDateTime(DateTime.Now);
         if (!string.IsNullOrWhiteSpace(date) && !DateOnly.TryParse(date, out day)) return Err(400, "Invalid date");
-        var from = day.ToDateTime(TimeOnly.MinValue);
-        var to = from.AddDays(1);
+        var dayStart = day.ToDateTime(TimeOnly.MinValue);
+        var dayEnd = dayStart.AddDays(1);
         var equipment = await core.Equipment.OrderBy(e => e.Title).ToListAsync();
-        var busy = await ops.Bookings.Where(b => b.StartTime >= from && b.StartTime < to &&
+        var busy = await ops.Bookings.Where(b => b.StartTime >= dayStart && b.StartTime < dayEnd &&
             (b.Status == BookingStatus.PENDING || b.Status == BookingStatus.CONFIRMED || b.Status == BookingStatus.IN_PROGRESS))
             .Select(b => new { b.EquipmentId, b.StartTime, b.UserId }).ToListAsync();
         var now = DateTime.Now;
@@ -516,7 +540,7 @@ public static class Api
             status = e.Status,
             slots = Enumerable.Range(open, Math.Max(0, close - open)).Select(h =>
             {
-                var s = from.AddHours(h);
+                var s = dayStart.AddHours(h);
                 var taken = busy.FirstOrDefault(b => b.EquipmentId == e.Id && b.StartTime == s);
                 var state = e.Status == EquipmentStatus.MAINTENANCE ? "maintenance"
                     : taken != null ? (taken.UserId == me.Id ? "mine" : "taken")
@@ -525,7 +549,7 @@ public static class Api
                 return new { hour = h, start = s, end = s.AddHours(1), state };
             }).ToList()
         }).ToList();
-        return Results.Ok(new { date = day.ToString("yyyy-MM-dd"), openHour = open, closeHour = close, equipment = rows });
+        return Results.Ok(new { date = day.ToString("yyyy-MM-dd"), openHour = open, closeHour = close, maxDaysAhead = opt.Value.MaxDaysAhead, pendingTimeoutHours = opt.Value.PendingTimeoutHours, equipment = rows });
     }
 
     // ---------- bookings (Ops, joined with Core in code) ----------
@@ -543,7 +567,7 @@ public static class Api
         return Results.Ok(list.Select(b => BookingDto(b, eqs.GetValueOrDefault(b.EquipmentId), users.GetValueOrDefault(b.UserId), me, now)));
     }
 
-    static async Task<IResult> CreateBooking(BookingReq req, HttpContext http, CoreDb core, OpsDb ops, IOptions<LemsOptions> opt)
+    static async Task<IResult> CreateBooking(BookingReq req, HttpContext http, CoreDb core, OpsDb ops, IOptions<LemsOptions> opt, IMailQueue mail)
     {
         var me = Security.Current(http);
         if (me == null) return Unauth();
@@ -591,12 +615,15 @@ public static class Api
                 await ops.SaveChangesAsync();
                 return Err(409, "Equipment unavailable (under maintenance)");
             }
+            var dm = new Domain(core, ops, mail);
+            await dm.StageBookingMail(booking, eq, MailKind.Received);   // "request received" - no calendar event yet (still PENDING)
+            dm.FlushMail();
             return Results.Ok(BookingDto(booking, eq, user, me, now));
         }
         finally { BookLock.Release(); }
     }
 
-    static async Task<IResult> CancelBooking(int id, HttpContext http, CoreDb core, OpsDb ops)
+    static async Task<IResult> CancelBooking(int id, HttpContext http, CoreDb core, OpsDb ops, IMailQueue mail)
     {
         var me = Security.Current(http);
         if (me == null) return Unauth();
@@ -605,16 +632,21 @@ public static class Api
         if ((b.Status != BookingStatus.PENDING && b.Status != BookingStatus.CONFIRMED) || DateTime.Now >= b.StartTime)
             return Err(409, "Cancellation unavailable");
         var eq = await core.Equipment.FindAsync(b.EquipmentId);
+        var was = b.Status;
         b.Status = BookingStatus.CANCELED;      // releases the slot
-        new Domain(core, ops).Notify(b.UserId, me.Role == Role.ADMIN && b.UserId != me.Id
+        var d = new Domain(core, ops, mail);
+        var byAdmin = me.Role == Role.ADMIN && b.UserId != me.Id;
+        d.Notify(b.UserId, byAdmin
             ? $"Your booking of {eq?.Title} ({Domain.When(b)}) was canceled by an administrator."
             : $"Your booking of {eq?.Title} ({Domain.When(b)}) has been canceled.");
+        await d.StageBookingMail(b, eq, MailKind.Canceled, byAdmin ? "it was canceled by an administrator" : null, was == BookingStatus.CONFIRMED);
         var fail = await TrySave(ops);
         if (fail != null) return fail;
+        d.FlushMail();
         return Results.Ok(BookingDto(b, eq, null, me, DateTime.Now));
     }
 
-    static async Task<IResult> ApproveBooking(int id, HttpContext http, CoreDb core, OpsDb ops)
+    static async Task<IResult> ApproveBooking(int id, HttpContext http, CoreDb core, OpsDb ops, IMailQueue mail)
     {
         var me = Security.Current(http);
         if (me == null) return Unauth();
@@ -625,12 +657,13 @@ public static class Api
         if (b.Status != BookingStatus.PENDING || b.StartTime <= now)
             return Err(409, "Only a PENDING request whose start time has not yet arrived can be approved");
         var eq = await core.Equipment.FindAsync(b.EquipmentId);
-        var d = new Domain(core, ops);
+        var d = new Domain(core, ops, mail);
         if (eq == null || eq.Status == EquipmentStatus.MAINTENANCE)
         {
             b.Status = BookingStatus.CANCELED;
             d.Notify(b.UserId, $"Your booking of {eq?.Title ?? "the equipment"} ({Domain.When(b)}) was canceled because the equipment is unavailable.");
-            await TrySave(ops);
+            await d.StageBookingMail(b, eq, MailKind.Canceled, "the equipment is unavailable", false);
+            if (await TrySave(ops) == null) d.FlushMail();
             return Err(409, "Equipment is under maintenance - the booking was canceled");
         }
         b.Status = BookingStatus.CONFIRMED;     // Status is a concurrency token: loses against a parallel cancellation
@@ -638,11 +671,13 @@ public static class Api
         d.Activity($"{Domain.Eq(eq)} is now reserved from {b.StartTime:HH:mm} to {b.EndTime:HH:mm} on {b.StartTime:dd.MM.yyyy}.");
         var fail = await TrySave(ops);
         if (fail != null) return fail;
+        await d.StageBookingMail(b, eq, MailKind.Confirmed);   // confirmation with the .ics calendar file
+        d.FlushMail();
         var u = await core.Users.FindAsync(b.UserId);
         return Results.Ok(BookingDto(b, eq, u, me, now));
     }
 
-    static async Task<IResult> RejectBooking(int id, HttpContext http, CoreDb core, OpsDb ops)
+    static async Task<IResult> RejectBooking(int id, HttpContext http, CoreDb core, OpsDb ops, IMailQueue mail)
     {
         var me = Security.Current(http);
         if (me == null) return Unauth();
@@ -652,9 +687,12 @@ public static class Api
         if (b.Status != BookingStatus.PENDING) return Err(409, "Only PENDING requests can be rejected");
         var eq = await core.Equipment.FindAsync(b.EquipmentId);
         b.Status = BookingStatus.REJECTED;      // releases the slot
-        new Domain(core, ops).Notify(b.UserId, $"Your booking of {eq?.Title} ({Domain.When(b)}) has been rejected.");
+        var d = new Domain(core, ops, mail);
+        d.Notify(b.UserId, $"Your booking of {eq?.Title} ({Domain.When(b)}) has been rejected.");
+        await d.StageBookingMail(b, eq, MailKind.Rejected);
         var fail = await TrySave(ops);
         if (fail != null) return fail;
+        d.FlushMail();
         return Results.Ok(BookingDto(b, eq, null, me, DateTime.Now));
     }
 
@@ -757,7 +795,7 @@ public static class Api
     }
 
     // Problem confirmed -> MAINTENANCE + cancel affected bookings (BR-RP-05). Safe to repeat.
-    static async Task<IResult> ConfirmRepair(int id, HttpContext http, CoreDb core, OpsDb ops)
+    static async Task<IResult> ConfirmRepair(int id, HttpContext http, CoreDb core, OpsDb ops, IMailQueue mail)
     {
         var me = Security.Current(http);
         if (me == null) return Unauth();
@@ -767,20 +805,22 @@ public static class Api
         if (r.Status != RepairStatus.OPEN || r.Confirmed) return Err(409, "The request is not awaiting review");
         var eq = await core.Equipment.FindAsync(r.EquipmentId);
         if (eq == null) return NotFound("Equipment");
-        var d = new Domain(core, ops);
+        var d = new Domain(core, ops, mail);
         try
         {
             await d.SetMaintenance(eq, "the equipment needs repair");   // Core first, then Ops cancellations
             r.Confirmed = true;
             d.Notify(r.CreatedBy, $"Your problem report \"{r.Title}\" was confirmed. {eq.Title} is under repair.");
+            await d.StageTextMail(r.CreatedBy, $"LEMS: problem report confirmed - {eq.Title}", $"Your problem report \"{r.Title}\" was confirmed. {eq.Title} is under repair.");
             await ops.SaveChangesAsync();
+            d.FlushMail();
         }
         catch (DbUpdateException) { return Err(500, "Saving failed - please press the button again (the action is safe to repeat)."); }
         return Results.Ok(RepairDto(r, eq, null, me));
     }
 
     // Problem not confirmed -> close, equipment unchanged (BR-RP-04)
-    static async Task<IResult> DismissRepair(int id, HttpContext http, CoreDb core, OpsDb ops)
+    static async Task<IResult> DismissRepair(int id, HttpContext http, CoreDb core, OpsDb ops, IMailQueue mail)
     {
         var me = Security.Current(http);
         if (me == null) return Unauth();
@@ -790,14 +830,17 @@ public static class Api
         if (r.Status != RepairStatus.OPEN || r.Confirmed) return Err(409, "The request is not awaiting review");
         r.Status = RepairStatus.CLOSED;
         r.Resolution = "NO_REPAIR_REQUIRED";
-        new Domain(core, ops).Notify(r.CreatedBy, $"Your problem report \"{r.Title}\" was reviewed: no repair is required.");
+        var d = new Domain(core, ops, mail);
+        d.Notify(r.CreatedBy, $"Your problem report \"{r.Title}\" was reviewed: no repair is required.");
+        await d.StageTextMail(r.CreatedBy, "LEMS: problem report reviewed", $"Your problem report \"{r.Title}\" was reviewed: no repair is required.");
         var fail = await TrySave(ops);
         if (fail != null) return fail;
+        d.FlushMail();
         return Results.Ok(RepairDto(r, await core.Equipment.FindAsync(r.EquipmentId), null, me));
     }
 
     // Result of repair inspected (BR-RP-07/08). Order: equipment back to service (Core) first, then close (Ops).
-    static async Task<IResult> CompleteRepair(int id, CompleteReq req, HttpContext http, CoreDb core, OpsDb ops)
+    static async Task<IResult> CompleteRepair(int id, CompleteReq req, HttpContext http, CoreDb core, OpsDb ops, IMailQueue mail)
     {
         var me = Security.Current(http);
         if (me == null) return Unauth();
@@ -808,7 +851,7 @@ public static class Api
         var eq = await core.Equipment.FindAsync(r.EquipmentId);
         if (!req.Working) return Results.Ok(new { repeated = true, request = RepairDto(r, eq, null, me) });   // repair cycle repeats
 
-        var d = new Domain(core, ops);
+        var d = new Domain(core, ops, mail);
         try
         {
             // equipment returns to service only when no other confirmed repair is still open
@@ -817,7 +860,9 @@ public static class Api
             r.Status = RepairStatus.CLOSED;
             r.Resolution = "RESOLVED";
             d.Notify(r.CreatedBy, $"The repair for your report \"{r.Title}\" has been completed.");
+            await d.StageTextMail(r.CreatedBy, "LEMS: repair completed", $"The repair for your report \"{r.Title}\" has been completed.");
             await ops.SaveChangesAsync();                                      // Ops
+            d.FlushMail();
         }
         catch (DbUpdateException) { return Err(500, "Saving failed - please press the button again (the action is safe to repeat)."); }
         return Results.Ok(new { repeated = false, request = RepairDto(r, eq, null, me) });
@@ -850,15 +895,128 @@ public static class Api
         }));
     }
 
-    // ---------- notifications (Ops) ----------
-    static async Task<IResult> ListNotifications(HttpContext http, OpsDb ops)
+    // ---------- profile ----------
+    static async Task<IResult> UpdateProfile(ProfileReq req, HttpContext http, CoreDb core)
     {
         var me = Security.Current(http);
         if (me == null) return Unauth();
+        var u = await core.Users.FindAsync(me.Id);
+        if (u == null) return Unauth();
+        var fields = new Dictionary<string, string>();
+        var name = req.Name?.Trim() ?? u.Name;
+        var surname = req.Surname?.Trim() ?? u.Surname;
+        if (name.Length == 0 || name.Length > 50 || !PersonName.IsMatch(name)) fields["name"] = "Enter a name (letters, max 50 characters)";
+        if (surname.Length == 0 || surname.Length > 50 || !PersonName.IsMatch(surname)) fields["surname"] = "Enter a surname (letters, max 50 characters)";
+        if (fields.Count > 0) return Err(400, "Please correct the highlighted fields", fields);
+        u.Name = name; u.Surname = surname;
+        if (req.EmailNotifications is bool en) u.EmailNotifications = en;
+        await core.SaveChangesAsync();
+        return Results.Ok(UserDto(u));
+    }
+
+    static async Task<IResult> ChangePassword(PasswordReq req, HttpContext http, CoreDb core, LoginThrottle throttle)
+    {
+        var me = Security.Current(http);
+        if (me == null) return Unauth();
+        var key = $"pw|{me.Id}";
+        if (throttle.IsBlocked(key, 8, out var wait))
+        {
+            http.Response.Headers["Retry-After"] = wait.ToString();
+            return Err(429, $"Too many failed attempts. Please try again in {wait} seconds.");
+        }
+        var u = await core.Users.FindAsync(me.Id);
+        if (u == null) return Unauth();
+        var current = req.CurrentPassword ?? "";
+        if (current.Length == 0 || current.Length > 128 || !Security.Verify(current, u.PasswordHash))
+        {
+            throttle.Fail(key);
+            return Err(400, "Please correct the highlighted fields", new { currentPassword = "Current password is not correct" });
+        }
+        var fields = new Dictionary<string, string>();
+        var problem = Security.PasswordProblem(req.NewPassword);
+        if (problem != null) fields["newPassword"] = problem;
+        else if (req.NewPassword == current) fields["newPassword"] = "The new password must be different from the current one";
+        if (req.NewPassword != req.ConfirmPassword) fields["confirmPassword"] = "Passwords do not match";
+        if (fields.Count > 0) return Err(400, "Please correct the highlighted fields", fields);
+
+        throttle.Reset(key);
+        u.PasswordHash = Security.Hash(req.NewPassword!);
+        await core.SaveChangesAsync();
+        // log out every OTHER device: a stolen session must not survive a password change
+        var token = http.Request.Cookies[Security.CookieName];
+        var keep = string.IsNullOrEmpty(token) ? "" : Security.TokenHash(token);
+        await core.UserSessions.Where(x => x.UserId == u.Id && x.TokenHash != keep).ExecuteDeleteAsync();
+        return Results.Ok(new { ok = true });
+    }
+
+    // ---------- reports (administrators only) ----------
+    static async Task<IResult> Reports(int? days, HttpContext http, CoreDb core, OpsDb ops, IOptions<LemsOptions> opt)
+    {
+        var me = Security.Current(http);
+        if (me == null) return Unauth();
+        if (me.Role != Role.ADMIN) return Forbidden();
+        var n = Math.Clamp(days ?? 30, 7, 365);
+        var since = DateTime.Today.AddDays(-(n - 1));
+        var until = DateTime.Today.AddDays(1);
+
+        var bookings = await ops.Bookings.Where(b => b.StartTime >= since && b.StartTime < until)
+            .Select(b => new { b.EquipmentId, b.StartTime, b.Status }).ToListAsync();
+        bool Used(BookingStatus s) => s == BookingStatus.CONFIRMED || s == BookingStatus.IN_PROGRESS || s == BookingStatus.FINISHED;
+        var used = bookings.Where(b => Used(b.Status)).ToList();
+
+        var equipment = await core.Equipment.OrderBy(e => e.Title).ToListAsync();
+        var capacityPerEquipment = n * Math.Max(1, opt.Value.CloseHour - opt.Value.OpenHour);   // bookable hours in the period
+        var utilization = equipment.Select(e =>
+        {
+            var hours = used.Count(b => b.EquipmentId == e.Id);   // every booking is one hour
+            return new { id = e.Id, inventoryNumber = e.InventoryNumber, title = e.Title, usedHours = hours, percent = Math.Round(hours * 100.0 / capacityPerEquipment, 1) };
+        }).OrderByDescending(x => x.usedHours).ThenBy(x => x.title).ToList();
+
+        var perDay = Enumerable.Range(0, n).Select(i =>
+        {
+            var day = since.AddDays(i);
+            var ofDay = bookings.Where(b => b.StartTime.Date == day).ToList();
+            return new { date = day.ToString("yyyy-MM-dd"), total = ofDay.Count, used = ofDay.Count(b => Used(b.Status)) };
+        }).ToList();
+
+        var byStatus = bookings.GroupBy(b => b.Status).Select(g => new { status = g.Key, count = g.Count() }).OrderByDescending(x => x.count).ToList();
+
+        var repairs = await ops.RepairRequests.Where(r => r.CreatedAt >= since).Select(r => new { r.EquipmentId, r.Confirmed, r.CreatedAt }).ToListAsync();
+        var eqById = equipment.ToDictionary(e => e.Id);
+        var faults = repairs.GroupBy(r => r.EquipmentId).Where(g => eqById.ContainsKey(g.Key))
+            .Select(g => new
+            {
+                equipmentId = g.Key, inventoryNumber = eqById[g.Key].InventoryNumber, title = eqById[g.Key].Title,
+                reports = g.Count(), confirmed = g.Count(x => x.Confirmed), lastReport = g.Max(x => x.CreatedAt)
+            }).OrderByDescending(x => x.reports).ThenByDescending(x => x.lastReport).Take(10).ToList();
+
+        var totalHours = used.Count;
+        var totalCapacity = capacityPerEquipment * Math.Max(1, equipment.Count);
+        return Results.Ok(new
+        {
+            days = n, fromDate = since.ToString("yyyy-MM-dd"), toDate = until.AddDays(-1).ToString("yyyy-MM-dd"),
+            totals = new
+            {
+                bookings = bookings.Count, usedHours = totalHours, repairs = repairs.Count,
+                confirmedRepairs = repairs.Count(r => r.Confirmed),
+                utilizationPercent = equipment.Count == 0 ? 0 : Math.Round(totalHours * 100.0 / totalCapacity, 1)
+            },
+            perDay, byStatus, utilization, faults
+        });
+    }
+
+    // ---------- notifications (Ops) ----------
+    static async Task<IResult> ListNotifications(HttpContext http, OpsDb ops, int? page, int? pageSize)
+    {
+        var me = Security.Current(http);
+        if (me == null) return Unauth();
+        var size = Math.Clamp(pageSize ?? 30, 1, 100);
+        var pg = Math.Max(1, page ?? 1);
+        var total = await ops.Notifications.CountAsync(n => n.UserId == me.Id);
         var items = await ops.Notifications.Where(n => n.UserId == me.Id).OrderByDescending(n => n.CreatedAt).ThenByDescending(n => n.Id)
-            .Take(30).Select(n => new { n.Id, n.Message, isRead = n.IsRead, createdAt = n.CreatedAt }).ToListAsync();
+            .Skip((pg - 1) * size).Take(size).Select(n => new { n.Id, n.Message, isRead = n.IsRead, createdAt = n.CreatedAt }).ToListAsync();
         var unread = await ops.Notifications.CountAsync(n => n.UserId == me.Id && !n.IsRead);
-        return Results.Ok(new { unread, items });
+        return Results.Ok(new { unread, total, page = pg, pageSize = size, items });
     }
 
     static async Task<IResult> ReadAll(HttpContext http, OpsDb ops)

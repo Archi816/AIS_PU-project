@@ -21,6 +21,7 @@ public class User
     [MaxLength(100)] public string Email { get; set; } = "";
     [MaxLength(255)] public string PasswordHash { get; set; } = "";
     public Role Role { get; set; }
+    public bool EmailNotifications { get; set; } = true;   // e-mail copies of booking notifications
     public DateTime CreatedAt { get; set; } = DateTime.Now;
 }
 
@@ -32,6 +33,9 @@ public class Equipment
     [MaxLength(250)] public string Description { get; set; } = "";
     [MaxLength(20)] public string Location { get; set; } = "";
     [MaxLength(30)] public string Category { get; set; } = "";
+    [MaxLength(1000)] public string Specifications { get; set; } = "";   // technical data shown in the info dialog
+    [MaxLength(50)] public string ContactName { get; set; } = "";        // person responsible for the equipment
+    [MaxLength(100)] public string ContactEmail { get; set; } = "";
     public EquipmentStatus Status { get; set; } = EquipmentStatus.AVAILABLE;
     public DateTime CreatedAt { get; set; } = DateTime.Now;
 }

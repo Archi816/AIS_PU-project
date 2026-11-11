@@ -31,6 +31,11 @@ builder.Services.AddHttpClient("ai", c =>
     c.BaseAddress = new Uri(builder.Configuration["AiService:BaseUrl"] ?? "http://127.0.0.1:8000");
     c.Timeout = TimeSpan.FromSeconds(90);   // provider timeout is 60 s plus search (API_CONTRACT.md)
 });
+// E-mail (MailKit/SMTP). Without Smtp:Host the channel is off and everything else works as before.
+builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection("Smtp"));
+builder.Services.AddSingleton<MailQueue>();
+builder.Services.AddSingleton<IMailQueue>(sp => sp.GetRequiredService<MailQueue>());
+builder.Services.AddHostedService<MailWorker>();
 builder.Services.AddHostedService<LifecycleWorker>();
 
 // The web UI is a separate container (frontend/, nginx) that proxies /api to this service. Behind that proxy the
@@ -55,6 +60,7 @@ using (var scope = app.Services.CreateScope())
     var ops = scope.ServiceProvider.GetRequiredService<OpsDb>();
     core.Database.EnsureCreated();
     ops.Database.EnsureCreated();
+    SchemaUpgrade.Core(core, app.Logger);   // adds columns introduced after the first release to existing databases
     // No migrations yet: EnsureCreated only builds a NEW database. Fail early with a clear message if an older one is in use.
     try { _ = core.EquipmentImages.Any(); _ = core.UserSessions.Any(); _ = ops.Notifications.Any(); }
     catch (Exception ex)

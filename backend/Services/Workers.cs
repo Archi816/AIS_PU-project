@@ -63,7 +63,7 @@ public class AiClient(IHttpClientFactory factory, IConfiguration cfg, ILogger<Ai
 
 /// <summary>Background worker: booking lifecycle (BR-BK-11/13/15), equipment status sync, session purge and
 /// cross-database reconciliation. Runs every 15 s; every step is idempotent.</summary>
-public class LifecycleWorker(IServiceScopeFactory scopes, IOptions<LemsOptions> opt, IOptions<SecurityOptions> sec, ILogger<LifecycleWorker> log) : BackgroundService
+public class LifecycleWorker(IServiceScopeFactory scopes, IOptions<LemsOptions> opt, IOptions<SecurityOptions> sec, IMailQueue mail, ILogger<LifecycleWorker> log) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -86,7 +86,7 @@ public class LifecycleWorker(IServiceScopeFactory scopes, IOptions<LemsOptions> 
         using var scope = scopes.CreateScope();
         var core = scope.ServiceProvider.GetRequiredService<CoreDb>();
         var ops = scope.ServiceProvider.GetRequiredService<OpsDb>();
-        var d = new Domain(core, ops);
+        var d = new Domain(core, ops, mail);
         var now = DateTime.Now;
 
         // 0. purge expired login sessions (Core)
@@ -105,8 +105,10 @@ public class LifecycleWorker(IServiceScopeFactory scopes, IOptions<LemsOptions> 
                 b.Status = BookingStatus.CANCELED;
                 var title = eq.TryGetValue(b.EquipmentId, out var e) ? e.Title : "the equipment";
                 d.Notify(b.UserId, $"Your booking request for {title} ({Domain.When(b)}) was canceled automatically because no decision was made in time.");
+                await d.StageBookingMail(b, e, MailKind.Canceled, "no decision was made in time", false);
             }
             await ops.SaveChangesAsync();
+            d.FlushMail();
         }
 
         // 2. IN_PROGRESS -> FINISHED (before starting new ones, so back-to-back bookings work)

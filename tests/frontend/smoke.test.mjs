@@ -29,8 +29,10 @@ async function boot(role, hash) {
 async function waitFor(fn, ms = 2000) { const t = Date.now(); while (!fn()) { if (Date.now() - t > ms) throw new Error('timeout'); await new Promise(r => setTimeout(r, 10)); } }
 
 const TITLES = {
-  ADMIN: [['#/dashboard', 'Equipment Availability'], ['#/equipment', 'Equipment'], ['#/bookings', 'Bookings'], ['#/repairs', 'Repair Requests'], ['#/inventory', 'Inventory'], ['#/students', 'Students']],
-  STUDENT: [['#/dashboard', 'Equipment Availability'], ['#/equipment', 'Equipment'], ['#/bookings', 'My Bookings'], ['#/repairs', 'Report Issue']]
+  ADMIN: [['#/dashboard', 'Equipment Availability'], ['#/equipment', 'Equipment'], ['#/calendar', 'Calendar'], ['#/bookings', 'Bookings'], ['#/repairs', 'Repair Requests'], ['#/inventory', 'Inventory'], ['#/students', 'Students'],
+          ['#/reports', 'Reports'], ['#/notifications', 'Notifications'], ['#/profile', 'Profile']],
+  STUDENT: [['#/dashboard', 'Equipment Availability'], ['#/equipment', 'Equipment'], ['#/calendar', 'Calendar'], ['#/bookings', 'My Bookings'], ['#/repairs', 'Report Issue'],
+            ['#/notifications', 'Notifications'], ['#/profile', 'Profile'], ['#/help', 'Rules & Help']]
 };
 for (const role of ['ADMIN', 'STUDENT']) {
   for (const [hash, title] of TITLES[role]) {
@@ -42,24 +44,26 @@ for (const role of ['ADMIN', 'STUDENT']) {
       assert.equal(w.__xss, undefined, 'script injection must not run');
       assert.equal(d.querySelector('#view img:not(.photo)'), null, 'user text must be escaped');
       assert.equal(d.querySelector('#view [onerror]'), null, 'no injected handlers');
-      assert.equal(d.querySelectorAll('.nav a').length, role === 'ADMIN' ? 6 : 4);
+      assert.equal(d.querySelectorAll('.nav a').length, role === 'ADMIN' ? 10 : 8);
       assert.equal(d.querySelectorAll('.nav a.active').length, 1);
     });
   }
 }
 
-test('STUDENT cannot open admin-only pages', async () => {
-  for (const hash of ['#/students', '#/inventory']) {
+test('STUDENT cannot open admin-only pages, ADMIN has no student help page', async () => {
+  for (const hash of ['#/students', '#/inventory', '#/reports']) {
     const { d } = await boot('STUDENT', hash);
     assert.equal(d.querySelector('#view h1').textContent, 'Equipment Availability');
   }
+  const a = await boot('ADMIN', '#/help');
+  assert.equal(a.d.querySelector('#view h1').textContent, 'Equipment Availability');
 });
 
 test('sidebar groups: admin has an extra Admin section, student does not', async () => {
   const a = await boot('ADMIN', '#/dashboard');
-  assert.deepEqual([...a.d.querySelectorAll('.nav-h')].map(x => x.textContent), ['Main', 'Admin']);
+  assert.deepEqual([...a.d.querySelectorAll('.nav-h')].map(x => x.textContent), ['Main', 'Admin', 'Account']);
   const s = await boot('STUDENT', '#/dashboard');
-  assert.deepEqual([...s.d.querySelectorAll('.nav-h')].map(x => x.textContent), ['Main']);
+  assert.deepEqual([...s.d.querySelectorAll('.nav-h')].map(x => x.textContent), ['Main', 'Account']);
   assert.match(s.d.querySelector('.side-user').textContent, /Jan User/);
 });
 
@@ -248,4 +252,99 @@ test('brand logo: sidebar icon and login wordmark', async () => {
   w.eval(art); w.eval(code);
   await waitFor(() => w.document.querySelector('.hero'));
   assert.match(w.document.querySelector('.hero img.hero-logo').getAttribute('src'), /^wordmark\.svg/);
+});
+
+test('equipment details dialog: specifications, responsible person, safe mailto', async () => {
+  const { w, d } = await boot('STUDENT', '#/equipment');
+  d.querySelector('[data-act="info"][data-id="1"]').click();
+  await waitFor(() => d.querySelector('.modal .kv'));
+  const text = d.querySelector('.modal').textContent;
+  assert.match(text, /Power: 230 V/); assert.match(text, /Dr\. Novak/);
+  const a = d.querySelector('.modal .kv a');
+  assert.equal(a.getAttribute('href'), 'mailto:novak@tuke.sk?subject=Question%20about%20ARD-001');
+  assert.equal(d.querySelector('.modal [onerror], .modal img:not(.photo)'), null, 'specifications are escaped');
+  assert.ok(d.querySelector('.modal #bk'), 'students can book from the dialog');
+  // a contact e-mail that tries to break out of the attribute stays inert
+  d.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape' }));
+  d.querySelector('[data-act="info"][data-id="2"]').click();
+  await waitFor(() => d.querySelector('.modal .kv'));
+  assert.equal(d.querySelector('.modal .kv a').hasAttribute('onmouseover'), false);
+  assert.equal(w.__xss, undefined);
+});
+
+test('ADMIN details dialog has no booking button; equipment form has the new fields', async () => {
+  const { d } = await boot('ADMIN', '#/equipment');
+  d.querySelector('[data-act="info"][data-id="1"]').click();
+  await waitFor(() => d.querySelector('.modal .kv'));
+  assert.equal(d.querySelector('.modal #bk'), null);
+  d.querySelector('#cx').click();
+  d.querySelector('[data-act="edit"][data-id="1"]').click();
+  await waitFor(() => d.querySelector('.modal #f-specifications'));
+  assert.equal(d.querySelector('#f-contactName').value, 'Dr. Novak');
+  assert.equal(d.querySelector('#f-contactEmail').value, 'novak@tuke.sk');
+});
+
+test('calendar: week grid with bookings, details dialog and week navigation', async () => {
+  const { d } = await boot('STUDENT', '#/calendar');
+  assert.equal(d.querySelectorAll('.cal-h').length, 8, 'corner + 7 days');
+  assert.equal(d.querySelectorAll('.cal-t').length, 12, 'one row per hour 08-19');
+  assert.ok(d.querySelectorAll('.cal .chip').length >= 1);
+  assert.equal(d.querySelector('.cal-h.today').textContent.length > 0, true);
+  d.querySelector('.cal .chip').click();
+  await waitFor(() => d.querySelector('.modal .kv'));
+  assert.match(d.querySelector('.modal').textContent, /Purpose/);
+  d.querySelector('#cx').click();
+  d.getElementById('c-next').click();
+  await waitFor(() => d.querySelectorAll('.cal .chip').length === 0);
+});
+
+test('ADMIN calendar shows student names and an equipment filter', async () => {
+  const { d } = await boot('ADMIN', '#/calendar');
+  assert.ok(d.getElementById('cal-eq'));
+  assert.match(d.querySelector('.cal .chip small').textContent, /Jan Novak/);
+});
+
+test('notifications page: list, unread marker, escaping and paging', async () => {
+  const { d, w } = await boot('STUDENT', '#/notifications');
+  assert.equal(d.querySelectorAll('.nrow').length, 2);
+  assert.equal(d.querySelectorAll('.nrow.unread').length, 1);
+  assert.equal(d.getElementById('read-all').disabled, false);
+  assert.equal(d.getElementById('prev').disabled, true);
+  assert.match(d.querySelector('.page-head .sub').textContent, /e-mail/);
+  assert.equal(w.__xss, undefined);
+});
+
+test('profile: account form, e-mail switch for students only, password form', async () => {
+  const s = await boot('STUDENT', '#/profile');
+  assert.equal(s.d.getElementById('p-name').value, 'Jan');
+  assert.equal(s.d.getElementById('p-mail').checked, true);
+  assert.equal(s.d.querySelector('input[value="u@x.sk"]').disabled, true, 'e-mail is read-only');
+  assert.ok(s.d.getElementById('pw-cur') && s.d.getElementById('pw-new') && s.d.getElementById('pw-cfm'));
+  const a = await boot('ADMIN', '#/profile');
+  assert.equal(a.d.getElementById('p-mail'), null);
+});
+
+test('ADMIN reports: totals, per-day bars, utilization and faults', async () => {
+  const { d, w } = await boot('ADMIN', '#/reports');
+  assert.equal(d.querySelectorAll('.stat').length, 4);
+  assert.equal(d.querySelectorAll('.bars .bar').length, 30);
+  assert.ok(d.querySelector('.urow'));
+  assert.match(d.getElementById('view').textContent, /Most frequent faults/);
+  assert.equal(d.querySelectorAll('.statusrow .badge').length, 4);
+  d.getElementById('rep-days').value = '7'; d.getElementById('rep-days').dispatchEvent(new w.Event('change'));
+  await waitFor(() => d.querySelectorAll('.bars .bar').length === 7);
+  assert.equal(w.__xss, undefined);
+});
+
+test('STUDENT help page: booking rules from the server settings and contacts', async () => {
+  const { d } = await boot('STUDENT', '#/help');
+  const text = d.getElementById('view').textContent;
+  assert.match(text, /08:00/); assert.match(text, /60 days/); assert.match(text, /24 hours/);
+  assert.match(text, /Dr\. Novak/);
+  assert.ok(d.querySelector('a[href^="mailto:novak@tuke.sk"]'));
+});
+
+test('bell dropdown links to the full notification list', async () => {
+  const { w, d } = await boot('STUDENT', '#/dashboard');
+  await waitFor(() => d.querySelector('#notes a[href="#/notifications"]'));
 });

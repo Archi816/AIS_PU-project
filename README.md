@@ -179,6 +179,20 @@ Backend settings for the split: `Security__BehindProxy=true` (set in the compose
 `X-Forwarded-For` / `X-Forwarded-Proto` from the frontend container. Do not publish the backend port to the internet in this mode.
 Frontend setting: `BACKEND_URL` (default `http://backend:8080`) is the address nginx proxies `/api/*` to.
 
+## E-mail notifications (optional)
+
+Students get an e-mail when a booking request is received, confirmed, rejected or canceled (also when the system
+cancels it: maintenance, removed equipment, no decision within 24 h). A **confirmed** booking carries an `.ics` calendar
+file (Google Calendar, Outlook, Apple) and an "Add to Google Calendar" link; canceling a confirmed booking sends an
+`.ics` with `METHOD:CANCEL` and the same UID, so the event disappears from the calendar. Each student can switch e-mails
+off in **Profile**. Messages are sent by a background worker (MailKit/SMTP): a failing mail server never breaks a booking.
+
+Set the SMTP server in `backend/.env` (see `.env.example`): `Smtp__Host`, `Smtp__Port`, `Smtp__User`, `Smtp__Password`,
+`Smtp__From`, `Smtp__PublicUrl`. With an empty `Smtp__Host` e-mails are simply off.
+
+**Database note:** new columns (`Equipment.specifications/contact_name/contact_email`, `Users.email_notifications`) are added
+automatically to an existing database when the backend starts (`Services/SchemaUpgrade.cs`), no data is lost.
+
 ## Architecture
 
 ![architecture](docs/assets/architecture.png)
