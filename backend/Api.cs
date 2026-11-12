@@ -808,10 +808,11 @@ public static class Api
         var d = new Domain(core, ops, mail);
         try
         {
+            // staged first: the author gets this e-mail and is skipped by the "equipment unavailable" e-mail to all students
+            await d.StageTextMail(r.CreatedBy, $"LEMS: problem report confirmed - {eq.Title}", $"Your problem report \"{r.Title}\" was confirmed. {eq.Title} is under repair.");
             await d.SetMaintenance(eq, "the equipment needs repair");   // Core first, then Ops cancellations
             r.Confirmed = true;
             d.Notify(r.CreatedBy, $"Your problem report \"{r.Title}\" was confirmed. {eq.Title} is under repair.");
-            await d.StageTextMail(r.CreatedBy, $"LEMS: problem report confirmed - {eq.Title}", $"Your problem report \"{r.Title}\" was confirmed. {eq.Title} is under repair.");
             await ops.SaveChangesAsync();
             d.FlushMail();
         }

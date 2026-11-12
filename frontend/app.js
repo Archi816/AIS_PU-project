@@ -61,21 +61,19 @@ let sched = { date: ymd(new Date()), all: false }, dashBk = 'all', invState = { 
 function showAuth(mode, errors = {}, msg = '', vals = {}) {
   clearTimers();
   const reg = mode === 'register';
-  const prow = (name, cells) => `<div class="pr"><span>${name}</span>${[...cells].map(c => `<i class="${c === 'x' ? 't' : c === 'm' ? 'm' : ''}"></i>`).join('')}</div>`;
-  $app.innerHTML = `<div class="auth"><section class="hero"><img class="hero-logo" src="wordmark.svg?v=5" alt="LEMS">
-      <h1>Laboratory Equipment<br>Management System</h1>
-      <p>Reserve laboratory equipment, follow every decision and report faults - all in one place.</p>
-      <ul><li>Book equipment in one-hour slots</li><li>Get notified about approvals and changes</li><li>Report problems with AI-assisted triage for technicians</li></ul>
-      <div class="preview" aria-hidden="true">${prow('Oscilloscope', '..xx....')}${prow('3D printer', 'xx..x...')}${prow('Centrifuge', 'mmmmmmmm')}</div></section>
-    <section class="formwrap"><div class="card">
-    <h2>${reg ? 'Create student account' : 'Welcome back'}</h2>
-    <div class="lead">${reg ? 'Use your university e-mail address.' : 'Log in to book and manage laboratory equipment.'}</div>
-    <label for="email">Email</label><input id="email" type="email" autocomplete="username" value="${esc(vals.email)}" placeholder="${reg ? 'name.surname@student.tuke.sk' : 'you@example.com'}">${fieldErr(errors, 'email')}
-    <label for="pw">Password</label><input id="pw" type="password" autocomplete="${reg ? 'new-password' : 'current-password'}">${fieldErr(errors, 'password')}
+  $app.innerHTML = `<div class="auth"><section class="hero"><img class="hero-logo" src="wordmark.svg?v=7" alt="LEMS">
+      <div class="hero-body"><div class="eyebrow">Technical University of Košice</div><h1>Laboratory Equipment<br>Management System</h1>
+        <p class="lead">Book equipment by the hour, follow every decision and report faults.</p></div>
+      <div class="ruler" aria-hidden="true"></div></section>
+    <section class="formwrap"><div class="formbox">
+    <h2>${reg ? 'Create your account' : 'Log in'}</h2>
+    <div class="lead">${reg ? 'Registration is open to students of the university.' : 'Use the e-mail and password of your LEMS account.'}</div>
+    <label for="email">E-mail</label><input id="email" type="email" autocomplete="username" value="${esc(vals.email)}" placeholder="${reg ? 'name.surname@student.tuke.sk' : 'name.surname@student.tuke.sk'}">${fieldErr(errors, 'email') || (reg ? '<div class="hint">Only @student.tuke.sk addresses are accepted.</div>' : '')}
+    <label for="pw">Password</label><input id="pw" type="password" autocomplete="${reg ? 'new-password' : 'current-password'}">${fieldErr(errors, 'password') || (reg ? '<div class="hint">At least 8 characters, with a letter and a digit.</div>' : '')}
     ${reg ? `<label for="pw2">Confirm password</label><input id="pw2" type="password" autocomplete="new-password">${fieldErr(errors, 'confirmPassword')}` : ''}
     ${msg ? `<div class="alert">${esc(msg)}</div>` : ''}
-    <button class="btn primary" id="go">${reg ? 'Create Account' : 'Log In'}</button>
-    <div class="alt">${reg ? 'Have an account? <a id="sw">Log in</a>' : 'New student? <a id="sw">Create an account</a>'}</div>
+    <button class="btn primary" id="go">${reg ? 'Create account' : 'Log in'}</button>
+    <div class="alt">${reg ? 'Already have an account? <a id="sw">Log in</a>' : 'No account yet? <a id="sw">Create one</a>'}</div>
   </div></section></div>`;
   document.getElementById('email')?.focus();
   const val = id => document.getElementById(id)?.value ?? '';
@@ -132,7 +130,7 @@ function shell(page) {
   const link = ([k, t]) => `<a href="#/${k}" class="${k === page ? 'active' : ''}">${(NAV_ICON[k] ? NAV_ICON[k]() : ICON[k])}<span>${esc(t)}</span></a>`;
   $app.innerHTML = `<div class="shell">
     <aside class="side" id="side">
-      <a class="brand" href="#/dashboard"><img class="logo" src="logo.svg?v=5" alt=""><b>LEMS<i>.</i></b></a>
+      <a class="brand" href="#/dashboard"><img class="logo" src="logo.svg?v=7" alt=""><b>LEMS<i>.</i></b></a>
       <nav class="nav">${NAV().map(([h, items]) => `<div class="nav-h">${h}</div>${items.map(link).join('')}`).join('')}</nav>
       <div class="side-user"><button class="acct" id="acct" aria-label="Account menu"><span class="avatar">${esc(ini)}</span><span class="who"><b>${esc(user.name)} ${esc(user.surname)}</b><span class="role">${role}</span></span></button>
         <div class="drop up" id="menu" hidden><div class="it"><small>Signed in as</small><br><b>${esc(user.email)}</b><br><small>${role}</small></div>

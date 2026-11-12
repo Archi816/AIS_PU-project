@@ -57,6 +57,17 @@ public class Domain(CoreDb core, OpsDb ops, IMailQueue? mail = null)
         if (u != null) outbox.Add(MailTemplates.Text(u, subject, message, mail!.AppUrl));
     }
 
+    /// <summary>Equipment went under maintenance: every student who keeps e-mail notifications on is told that it cannot be booked now.
+    /// Students who already get a "booking canceled" (or other) e-mail staged in this operation are skipped, so nobody receives two.</summary>
+    public async Task StageUnavailableMail(Equipment e, string reason)
+    {
+        if (mail is not { Enabled: true }) return;
+        var already = outbox.Select(m => m.To).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var students = await core.Users.AsNoTracking().Where(u => u.Role == Role.STUDENT && u.EmailNotifications).ToListAsync();
+        foreach (var u in students)
+            if (!already.Contains(u.Email)) outbox.Add(MailTemplates.ForUnavailable(u, e, reason, mail.AppUrl));
+    }
+
     public void FlushMail()
     {
         if (mail != null) foreach (var m in outbox) mail.Enqueue(m);
@@ -94,6 +105,7 @@ public class Domain(CoreDb core, OpsDb ops, IMailQueue? mail = null)
             await core.SaveChangesAsync();
         }
         await CancelOpenBookings(e, reason);
+        if (!was) await StageUnavailableMail(e, reason);   // e-mail to all students (sent by the caller's FlushMail after the save)
         if (!was)
             Activity($"{Eq(e)} has been placed under maintenance and is unavailable for booking. All affected reservations have been cancelled.");
     }

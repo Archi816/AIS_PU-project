@@ -37,7 +37,7 @@ public interface IMailQueue
 /// <summary>In-memory queue. Sending happens in MailWorker, so a slow or broken SMTP server never slows down or breaks a booking.</summary>
 public class MailQueue(IOptions<SmtpOptions> opt) : IMailQueue
 {
-    readonly Channel<MailItem> channel = Channel.CreateBounded<MailItem>(new BoundedChannelOptions(500) { FullMode = BoundedChannelFullMode.DropWrite });
+    readonly Channel<MailItem> channel = Channel.CreateBounded<MailItem>(new BoundedChannelOptions(2000) { FullMode = BoundedChannelFullMode.DropWrite });
     public bool Enabled => !string.IsNullOrWhiteSpace(opt.Value.Host);
     public string AppUrl => opt.Value.PublicUrl?.Trim() ?? "";
     public ChannelReader<MailItem> Reader => channel.Reader;
@@ -198,6 +198,12 @@ public static class MailTemplates
                     wasConfirmed ? Ics.Event(b, title, loc, "CANCEL") : null, wasConfirmed ? "CANCEL" : null, wasConfirmed ? $"booking-{b.Id}.ics" : null);
         }
     }
+
+    public static MailItem ForUnavailable(User u, Equipment e, string reason, string appUrl) =>
+        Build(u.Email, $"LEMS: equipment unavailable - {e.Title}", $"Hello {u.Name},",
+            new[] { $"{e.Title} is temporarily unavailable: {reason}. It cannot be booked until it is back in service." },
+            new[] { ("Equipment", $"{e.Title} (Inventory No.: {e.InventoryNumber})"), ("Location", e.Location.Length > 0 ? e.Location : "-") },
+            appUrl, null, null, null, null, null);
 
     public static MailItem Text(User u, string subject, string message, string appUrl) =>
         Build(u.Email, subject, $"Hello {u.Name},", new[] { message }, Array.Empty<(string, string)>(), appUrl, null, null, null, null, null);
